@@ -1,0 +1,139 @@
+"""Gold-label storage and validation for the evaluation sets.
+
+Labels live in append-only JSONL files under eval/labels/. A record is only ever
+written by eval/label_tool.py from a person's answers; nothing here calls a model.
+"""
+
+import json
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+EVAL_DIR = Path(__file__).resolve().parent
+LABEL_DIR = EVAL_DIR / "labels"
+
+TZ = ZoneInfo("Asia/Kolkata")
+# Every note is read as if written at this moment (see LABELING_GUIDE.md).
+FIXED_NOW = datetime(2026, 11, 2, 9, 0, tzinfo=TZ)
+
+TASK_TYPES = ("normal", "email")
+DIRECTIONS = ("need_from_them", "they_need_from_me")
+LABELED_BY = "human via eval/label_tool.py"
+
+SETS = {"dev": "dev.jsonl", "test": "dataset.jsonl"}
+
+
+def input_path(set_name: str) -> Path:
+    return EVAL_DIR / SETS[set_name]
+
+
+def label_path(set_name: str) -> Path:
+    return LABEL_DIR / f"{Path(SETS[set_name]).stem}.labels.jsonl"
+
+
+def load_inputs(set_name: str) -> list[dict]:
+    lines = input_path(set_name).read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
+
+
+def read_history(set_name: str) -> list[dict]:
+    path = label_path(set_name)
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def latest_by_id(history: list[dict]) -> dict[str, dict]:
+    """The most recent record per item wins; earlier ones stay in the file as history."""
+    latest: dict[str, dict] = {}
+    for record in history:
+        latest[record["id"]] = record
+    return latest
+
+
+def append_record(set_name: str, record: dict) -> dict:
+    LABEL_DIR.mkdir(parents=True, exist_ok=True)
+    previous = [r for r in read_history(set_name) if r["id"] == record["id"]]
+    record = {
+        **record,
+        "labeled_at": datetime.now(UTC).isoformat(),
+        "labeled_by": LABELED_BY,
+        "revision": len(previous) + 1,
+    }
+    with label_path(set_name).open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    return record
+
+
+def parse_deadline(text: str) -> str | None:
+    """'YYYY-MM-DD HH:MM' in IST -> ISO 8601 with offset. Blank means no deadline.
+    Raises ValueError with a message meant for the person labeling."""
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%d %H:%M")
+    except ValueError:
+        raise ValueError("use YYYY-MM-DD HH:MM, for example 2026-11-03 17:00") from None
+    value = parsed.replace(tzinfo=TZ)
+    if value <= FIXED_NOW:
+        raise ValueError("a deadline must be after Mon 2 Nov 2026 09:00 (the reference time)")
+    return value.isoformat()
+
+
+def validate_labels(labels: dict, team_ids: list[str]) -> list[str]:
+    """Return a list of problems (empty means the labels are consistent)."""
+    problems = []
+    n = labels.get("n_tasks")
+    if not isinstance(n, int) or not 1 <= n <= 10:
+        return ["n_tasks must be a whole number from 1 to 10"]
+    if n > 1:
+        extra = set(labels) - {"n_tasks"}
+        return [f"multi-task notes record only n_tasks (found {sorted(extra)})"] if extra else []
+    if labels.get("task_type") not in TASK_TYPES:
+        problems.append(f"task_type must be one of {TASK_TYPES}")
+    if not isinstance(labels.get("needs_clarification"), bool):
+        problems.append("needs_clarification must be yes or no")
+    has_dep = labels.get("has_dependency")
+    direction, team = labels.get("dependency_direction"), labels.get("dependency_team")
+    if has_dep is True:
+        if direction not in DIRECTIONS:
+            problems.append(f"dependency_direction must be one of {DIRECTIONS}")
+        if team not in [*team_ids, "unknown"]:
+            problems.append("dependency_team must be a directory team id or 'unknown'")
+        if team == "unknown" and labels.get("needs_clarification") is False:
+            problems.append("an 'unknown' dependency team means needs_clarification must be yes (rule C3)")
+    elif has_dep is False:
+        if direction != "none" or team != "none":
+            problems.append("with no dependency, direction and team must be 'none'")
+    else:
+        problems.append("has_dependency must be yes or no")
+    deadline = labels.get("deadline")
+    if deadline is not None:
+        try:
+            value = datetime.fromisoformat(deadline)
+        except (TypeError, ValueError):
+            problems.append("deadline must be ISO 8601 or null")
+        else:
+            if value.tzinfo is None or value <= FIXED_NOW:
+                problems.append("deadline must include an offset and be after the reference time")
+    return problems
+
+
+@dataclass
+class Progress:
+    total: int
+    labeled: int
+    flagged: int
+
+    @property
+    def remaining(self) -> int:
+        return self.total - self.labeled - self.flagged
+
+
+def progress(set_name: str) -> Progress:
+    latest = latest_by_id(read_history(set_name))
+    inputs = load_inputs(set_name)
+    statuses = [latest[i["id"]]["status"] for i in inputs if i["id"] in latest]
+    return Progress(len(inputs), statuses.count("labeled"), statuses.count("flagged"))
