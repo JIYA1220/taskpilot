@@ -15,8 +15,9 @@ def test_defaults_are_the_safe_ones():
     s = Settings(_env_file=None)
     assert s.email_backend == "mailpit"
     assert s.allowlist == []  # empty allowlist: gmail would block everything
-    assert s.groq_main_model == "llama-3.3-70b-versatile"
-    assert s.groq_fast_model == "llama-3.1-8b-instant"
+    assert s.groq_main_model == "openai/gpt-oss-120b"
+    assert s.groq_fast_model == "openai/gpt-oss-20b"
+    assert s.groq_reasoning_effort == "low"
 
 
 def test_allowlist_parsing():

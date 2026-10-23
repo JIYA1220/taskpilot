@@ -20,8 +20,11 @@ class Settings(BaseSettings):
 
     groq_api_key: SecretStr = SecretStr("")
     groq_base_url: str = "https://api.groq.com/openai/v1"
-    groq_main_model: str = "llama-3.3-70b-versatile"
-    groq_fast_model: str = "llama-3.1-8b-instant"
+    groq_main_model: str = "openai/gpt-oss-120b"
+    groq_fast_model: str = "openai/gpt-oss-20b"
+    # gpt-oss are reasoning models: low keeps latency and token use down.
+    groq_reasoning_effort: Literal["low", "medium", "high"] = "low"
+    checkpoint_db: str = "data/checkpoints.db"
 
     jwt_secret: SecretStr = SecretStr("")
     jwt_expire_minutes: int = 480
