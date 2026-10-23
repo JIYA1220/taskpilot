@@ -1,0 +1,4 @@
+#!/bin/sh
+# Installed by: python -m scripts.install_hooks
+PY=$(command -v python || command -v python3 || command -v py)
+exec "$PY" scripts/check_secrets.py --staged
