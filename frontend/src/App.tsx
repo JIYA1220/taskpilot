@@ -1,34 +1,48 @@
-import { useEffect, useState } from "react";
-
-type Health = { status: string; email_backend: string; groq_key_configured: boolean };
+import { useCallback, useEffect, useState } from "react";
+import { api, getToken, Me, setToken } from "./api";
+import Login from "./Login";
+import Today from "./Today";
 
 export default function App() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [error, setError] = useState(false);
+  const [me, setMe] = useState<Me | null>(null);
+  const [checking, setChecking] = useState(() => getToken() !== null);
 
-  useEffect(() => {
-    fetch("/api/health")
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then(setHealth)
-      .catch(() => setError(true));
+  const load = useCallback(() => {
+    setChecking(true);
+    api
+      .me()
+      .then(setMe)
+      .catch(() => {
+        setToken(null);
+        setMe(null);
+      })
+      .finally(() => setChecking(false));
   }, []);
 
+  useEffect(() => {
+    if (getToken()) load();
+  }, [load]);
+
+  const logout = useCallback(() => {
+    setToken(null);
+    setMe(null);
+  }, []);
+
+  if (checking) return <p className="p-8 text-slate-500">Loading...</p>;
+  if (!me) return <Login onLoggedIn={load} />;
+
   return (
-    <main className="mx-auto max-w-xl p-8 font-sans text-slate-800">
-      <h1 className="text-3xl font-semibold">TaskPilot</h1>
-      <p className="mt-2 text-slate-600">AI work tracker for small teams. Milestone 0: scaffolding.</p>
-      <section className="mt-6 rounded-lg border border-slate-200 p-4">
-        <h2 className="font-medium">Backend</h2>
-        {error && <p className="mt-2 text-red-600">Cannot reach the API on /api/health.</p>}
-        {!error && !health && <p className="mt-2 text-slate-500">Checking...</p>}
-        {health && (
-          <ul className="mt-2 text-sm text-slate-700">
-            <li>Status: {health.status}</li>
-            <li>Email backend: {health.email_backend}</li>
-            <li>Groq key configured: {health.groq_key_configured ? "yes" : "no"}</li>
-          </ul>
-        )}
-      </section>
+    <main className="mx-auto max-w-3xl p-6 font-sans text-slate-800">
+      <header className="mb-6 flex items-baseline justify-between border-b border-slate-200 pb-3">
+        <h1 className="text-2xl font-semibold text-slate-900">TaskPilot</h1>
+        <div className="text-sm text-slate-600">
+          {me.name} ({me.team_id}){" "}
+          <button onClick={logout} className="ml-2 text-indigo-700 hover:underline">
+            Sign out
+          </button>
+        </div>
+      </header>
+      <Today onUnauthorized={logout} />
     </main>
   );
 }
