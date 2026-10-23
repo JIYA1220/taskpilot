@@ -10,6 +10,13 @@ from backend.security import decode_access_token
 _bearer = HTTPBearer(auto_error=False)
 
 
+def get_graph():
+    # Imported lazily so importing the API never builds the graph or reads .env.
+    from backend.organize.runtime import default_graph
+
+    return default_graph()
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     session: Session = Depends(get_session),
