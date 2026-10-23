@@ -1,0 +1,40 @@
+{
+  "org_name": "Acme Demo Co. (synthetic)",
+  "domain": "acme.example.com",
+  "teams": [
+    {
+      "id": "product",
+      "name": "Product Engineering",
+      "description": "Builds the customer-facing web and mobile apps.",
+      "owns": ["customer web app", "mobile app", "onboarding flow"]
+    },
+    {
+      "id": "payments",
+      "name": "Payments",
+      "description": "Moves money: charges, refunds and settlements.",
+      "owns": ["refund API", "payment gateway integration", "settlements dashboard"]
+    },
+    {
+      "id": "platform",
+      "name": "Platform Engineering",
+      "description": "Shared infrastructure, environments and deployment.",
+      "owns": ["staging environment", "CI/CD pipeline", "auth service"]
+    },
+    {
+      "id": "data",
+      "name": "Data and Analytics",
+      "description": "Reports, metrics and the data warehouse.",
+      "owns": ["weekly report pipeline", "KPI dashboard", "customer data warehouse"]
+    }
+  ],
+  "users": [
+    {"name": "Jiya Sharma", "email": "jiya.sharma@acme.example.com", "team_id": "product"},
+    {"name": "Aarav Singh", "email": "aarav.singh@acme.example.com", "team_id": "product"},
+    {"name": "Meera Nair", "email": "meera.nair@acme.example.com", "team_id": "payments"},
+    {"name": "Arjun Rao", "email": "arjun.rao@acme.example.com", "team_id": "payments"},
+    {"name": "Karan Mehta", "email": "karan.mehta@acme.example.com", "team_id": "platform"},
+    {"name": "Sneha Iyer", "email": "sneha.iyer@acme.example.com", "team_id": "platform"},
+    {"name": "Ravi Kumar", "email": "ravi.kumar@acme.example.com", "team_id": "data"},
+    {"name": "Anita Desai", "email": "anita.desai@acme.example.com", "team_id": "data"}
+  ]
+}
