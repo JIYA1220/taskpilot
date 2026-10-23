@@ -1,6 +1,6 @@
 # Labeling guide
 
-Version 1 (draft, waiting for Jiya's approval). One page of rules so that every ambiguous note is labeled the same way. Read it once before labeling, and press `?` in the tool for the short version.
+**Version 1, approved as written on 23 October 2026** (approval relayed to the assistant in chat). Any later change to a rule needs a new version and relabeling of the affected notes. One page of rules so that every ambiguous note is labeled the same way. Read it once before labeling, and press `?` in the tool for the short version.
 
 ## What you are doing
 
