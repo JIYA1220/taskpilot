@@ -1,0 +1,32 @@
+# secrets: never commit these
+.env
+.env.*
+!.env.example
+secrets/
+token.json
+*.pem
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# local data
+data/
+*.db
+*.sqlite3
+
+# eval caches (LLM responses are re-creatable and can be large)
+eval/cache/
+
+# node / frontend
+node_modules/
+frontend/dist/
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
