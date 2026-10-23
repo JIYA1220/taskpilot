@@ -16,7 +16,7 @@ Work in progress. Nothing below has been measured yet: **evaluation results: not
 | M3 Reviewer emails and approve-before-send | not started |
 | M4 Dependencies and schedule conflicts | not started |
 | M5 Team chat | not started |
-| M6 Evaluation on hand-labeled data | not started |
+| M6 Evaluation on hand-labeled data | in progress: labeling guide, blind labeling tool and the 15 dev and 60 test notes exist; **no gold labels written yet; all results: not yet measured** |
 | M7 README, demo, deployment notes | not started |
 
 ## Run it
@@ -49,7 +49,13 @@ pytest                                   # backend tests (no network, no .env ne
 python -m scripts.install_hooks          # block commits containing a Groq key (run once per clone)
 python -m scripts.check_models           # confirm the configured Groq models exist (uses .env)
 python -m scripts.gen_secret             # print a JWT secret to paste into .env
+python -m eval.label_tool dev            # write gold labels by hand (blind: shows only the note text)
+python -m eval.label_tool test --stats   # labeling progress
 ```
+
+## Evaluation data and labeling
+
+The evaluation uses 15 dev notes (for prompt tuning) and 60 test notes (never used for tuning), in [`eval/dev.jsonl`](eval/dev.jsonl) and [`eval/dataset.jsonl`](eval/dataset.jsonl). The notes were written by an AI assistant, not by the evaluated models. **Every gold label is written by a person** with [`eval/label_tool.py`](eval/label_tool.py), which shows only the note text, and follows [`eval/LABELING_GUIDE.md`](eval/LABELING_GUIDE.md). Labels are stored append-only with timestamps and revision numbers in `eval/labels/`. Fifty of the test notes contain one task each and ten contain several; per-task metrics are scored on the fifty single-task notes only, so the confidence intervals rest on n=50.
 
 ## How Organize works (Milestone 1)
 
