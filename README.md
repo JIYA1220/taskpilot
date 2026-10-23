@@ -2,7 +2,7 @@
 
 I type my day's tasks in plain language ("ask payments team for the refund API", "send weekly report to Ravi by 5"). I press **Organize**. The AI turns the text into structured tasks, asks me a few short questions where it is unsure (priority, deadline, who it depends on), then rewrites each task as a clear problem statement. It reminds me of pending tasks every 60 minutes. Each task can have a **reviewer** who gets an email when it is completed or when the deadline is missed. Tasks that only mean "send an email" get a drafted email that I approve with one click. Tasks that depend on another team are flagged as **blocked**, the AI asks me what is missing, notifies the reviewer, and opens a chat room with the people who own that dependency.
 
-All AI calls go to the [Groq](https://groq.com) API (`llama-3.3-70b-versatile` and `llama-3.1-8b-instant`). There is no local model.
+All AI calls go to the [Groq](https://groq.com) API (`openai/gpt-oss-120b` as the main model and `openai/gpt-oss-20b` as the fast one; model names are config, not code). There is no local model. The original plan used two Llama models, which are no longer available on the Groq account used here.
 
 ## Status
 
@@ -11,7 +11,7 @@ Work in progress. Nothing below has been measured yet: **evaluation results: not
 | Milestone | State |
 |---|---|
 | M0 Scaffolding, auth, demo organization | done |
-| M1 Organize (split, clarify, rewrite) | not started |
+| M1 Organize (split, clarify, rewrite) | done (tested with a mocked LLM and tried by hand against Groq; accuracy: not yet measured) |
 | M2 Reminders and deadlines | not started |
 | M3 Reviewer emails and approve-before-send | not started |
 | M4 Dependencies and schedule conflicts | not started |
@@ -50,6 +50,21 @@ python -m scripts.install_hooks          # block commits containing a Groq key (
 python -m scripts.check_models           # confirm the configured Groq models exist (uses .env)
 python -m scripts.gen_secret             # print a JWT secret to paste into .env
 ```
+
+## How Organize works (Milestone 1)
+
+```
+notes ──► Step A: extract (main model) ──► Step B: clarify (code) ──► PAUSE ──► Step C: rewrite (main model) ──► review ──► save
+```
+
+1. **Step A, extract.** The main model splits the notes into tasks and returns title, type (`normal` or `email`), deadline (relative dates resolved against the current time in the configured timezone), estimated minutes, a possible dependency, and a list of unknowns with tappable suggestions. The dependency team is restricted to the demo directory's team ids, so the model cannot invent a team.
+2. **Step B, clarify.** Plain code, not an LLM call: it picks at most 3 questions from the unknowns (dependency, then deadline, then priority, then the rest) and the LangGraph run **pauses** at an interrupt. The paused run is stored in a SQLite checkpoint, so it survives a server restart. Every question can be skipped.
+3. **Step C, rewrite.** The main model writes goal, definition of done and inputs needed, assigns P1 to P3 with a one-line reason, and may set a deadline only when the person's answer gave one. The deadline line is added by code, not by the model.
+4. **Review and save.** Nothing is stored until the person edits and saves.
+
+Model output is requested in JSON mode and validated with Pydantic. On a validation failure the model gets one retry with the error message; after that the task falls back to "needs manual review" instead of crashing. A reviewer address is only ever taken from the person's own answer or the directory, never from model output. Every LLM attempt is recorded in an audit table (model, prompt version, latency, tokens, parsed ok), never the key or the message text.
+
+Prompts are versioned files in [`backend/prompts/`](backend/prompts/). The date rules in them ("by 5" is 17:00 today or tomorrow if already past, a date alone is 23:59) are the conventions the evaluation's labeling guide will use.
 
 ## Layout
 
