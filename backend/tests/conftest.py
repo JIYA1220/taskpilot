@@ -3,10 +3,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
+from backend.api.deps import get_sender
 from backend.config import Settings, get_settings
 from backend.db import get_session
 from backend.directory import seed_directory
 from backend.main import app
+from backend.tests.fakes import FakeSender
 
 DEMO_PASSWORD = "test-password-123"
 
@@ -39,12 +41,19 @@ def seeded(session, settings):
 
 
 @pytest.fixture
-def client(engine, settings):
+def sender():
+    """A fake mailbox. The API never reaches a real SMTP server or Gmail from a test."""
+    return FakeSender()
+
+
+@pytest.fixture
+def client(engine, settings, sender):
     def _session():
         with Session(engine) as s:
             yield s
 
     app.dependency_overrides[get_session] = _session
     app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_sender] = lambda: sender
     yield TestClient(app)
     app.dependency_overrides.clear()

@@ -10,14 +10,15 @@ FIXED_NOW = datetime(2026, 11, 2, 3, 30, tzinfo=UTC)
 
 
 class FakeTransport:
-    """Replies are queued per prompt kind ("extract" or "rewrite"); the last one repeats."""
+    """Replies are queued per prompt kind ("extract", "rewrite" or "draft"); the last one repeats."""
 
-    def __init__(self, extract=(), rewrite=()):
-        self.queues = {"extract": list(extract), "rewrite": list(rewrite)}
+    def __init__(self, extract=(), rewrite=(), draft=()):
+        self.queues = {"extract": list(extract), "rewrite": list(rewrite), "draft": list(draft)}
         self.calls: list[dict] = []
 
     def __call__(self, model, messages, max_tokens) -> RawCompletion:
-        kind = "extract" if messages[0]["content"].startswith("You turn") else "rewrite"
+        system = messages[0]["content"]
+        kind = "extract" if system.startswith("You turn") else "draft" if system.startswith("You draft") else "rewrite"
         self.calls.append({"kind": kind, "model": model, "messages": [dict(m) for m in messages]})
         queue = self.queues[kind]
         reply = queue.pop(0) if len(queue) > 1 else queue[0]
@@ -26,6 +27,27 @@ class FakeTransport:
 
     def count(self, kind: str) -> int:
         return sum(1 for c in self.calls if c["kind"] == kind)
+
+
+class FakeSender:
+    """Collects emails instead of sending them. `fail_next` makes the next sends raise."""
+
+    def __init__(self):
+        self.sent: list = []
+        self._failures: list = []
+
+    def fail_next(self, count: int = 1, retryable: bool = True, message: str = "connection refused"):
+        from backend.mail.sender import EmailSendError
+
+        self._failures += [EmailSendError(message, retryable=retryable)] * count
+
+    def raise_next(self, exc: Exception):
+        self._failures.append(exc)
+
+    def send(self, message) -> None:
+        if self._failures:
+            raise self._failures.pop(0)
+        self.sent.append(message)
 
 
 def extract_reply(*tasks: dict) -> dict:
