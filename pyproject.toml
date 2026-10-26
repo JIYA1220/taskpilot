@@ -24,6 +24,7 @@ dependencies = [
     "langgraph>=0.2",
     "langgraph-checkpoint-sqlite>=2.0",
     "tzdata>=2024.1",
+    "apscheduler>=3.10,<4",
 ]
 
 [project.optional-dependencies]

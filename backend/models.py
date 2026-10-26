@@ -74,6 +74,32 @@ class ClarifyingQuestion(SQLModel, table=True):
     answer: str | None = None
 
 
+class UserPrefs(SQLModel, table=True):
+    """Reminder settings. A user without a row gets these defaults when first needed."""
+
+    user_id: int = Field(foreign_key="user.id", primary_key=True)
+    reminders_enabled: bool = True
+    interval_minutes: int = 60
+    work_start: str = "09:00"  # local time in the app timezone, HH:MM
+    work_end: str = "18:00"
+    work_days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4], sa_column=Column(JSON, nullable=False))  # 0 = Monday
+    last_reminder_at: datetime | None = Field(
+        default=None, sa_column=Column(UTCDateTime, nullable=True)
+    )
+
+
+class Notification(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    kind: str  # reminder, missed
+    message: str
+    payload: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    read: bool = False
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_column=Column(UTCDateTime, nullable=False)
+    )
+
+
 class AuditLog(SQLModel, table=True):
     """One row per LLM attempt (and, from Milestone 3, per email sent). Never holds keys."""
 

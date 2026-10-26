@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     mailpit_host: str = "localhost"
     mailpit_port: int = 1025
 
+    # In-process scheduler: how often it looks for missed deadlines and due reminders.
+    # Turn it off (SCHEDULER_ENABLED=false) if you ever run more than one process.
+    scheduler_enabled: bool = True
+    scheduler_tick_seconds: int = 30
+
     org_domain: str = "acme.example.com"
     timezone: str = "Asia/Kolkata"
     directory_path: Path = REPO_ROOT / "eval" / "directory.json"
