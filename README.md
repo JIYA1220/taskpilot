@@ -12,7 +12,7 @@ Work in progress. Nothing below has been measured yet: **evaluation results: not
 |---|---|
 | M0 Scaffolding, auth, demo organization | done |
 | M1 Organize (split, clarify, rewrite) | done (tested with a mocked LLM and tried by hand against Groq; accuracy: not yet measured) |
-| M2 Reminders and deadlines | not started |
+| M2 Reminders and deadlines | done (fake-clock tests; in-app bell, settings and task buttons tried live; browser pop-ups implemented but not yet seen in a real browser) |
 | M3 Reviewer emails and approve-before-send | not started |
 | M4 Dependencies and schedule conflicts | not started |
 | M5 Team chat | not started |
@@ -71,6 +71,17 @@ notes ──► Step A: extract (main model) ──► Step B: clarify (code) �
 Model output is requested in JSON mode and validated with Pydantic. On a validation failure the model gets one retry with the error message; after that the task falls back to "needs manual review" instead of crashing. A reviewer address is only ever taken from the person's own answer or the directory, never from model output. Every LLM attempt is recorded in an audit table (model, prompt version, latency, tokens, parsed ok), never the key or the message text.
 
 Prompts are versioned files in [`backend/prompts/`](backend/prompts/). The date rules in them ("by 5" is 17:00 today or tomorrow if already past, a date alone is 23:59) are the conventions the evaluation's labeling guide will use.
+
+## Reminders and deadlines (Milestone 2)
+
+- **Missed deadlines.** A background job runs every 30 seconds (`SCHEDULER_TICK_SECONDS`). Any task that is not done and whose deadline has passed becomes `missed`, and its owner gets one notification. A deadline exactly equal to "now" is not missed yet.
+- **Reminders.** Every `interval` minutes (default 60, settable from 1 to 1440 in Settings; the "Demo: 1 min" button is for trying it out) the owner gets one notification listing pending tasks: **P1 first, then nearest deadline, tasks without a deadline last**, each with time left, at most 8 shown. No pending tasks means no reminder.
+- **Working hours.** Reminders are only sent inside the working hours and days chosen in Settings (default Monday to Friday, 09:00 to 18:00 Asia/Kolkata; start inclusive, end exclusive). After hours nothing is sent, and the first tick in the next working window reminds straight away. Missed-deadline detection is a fact, not a nudge, so it ignores working hours.
+- **Where you see them.** The Notifications button (bell) polls every 20 seconds and shows unread counts. If you click "Enable browser notifications" (browsers only allow asking after a click), new notifications also pop up through the Web Notifications API.
+- **Finishing tasks.** Start, Pause, Done and Reopen buttons call `POST /api/tasks/{id}/status`. `blocked` and `missed` are set by the system only; a missed task can only be marked done (late).
+- **Tests.** The logic in `backend/reminders.py` takes `now` as an argument, so the tests drive it with a fake clock: first reminder, 59 versus 60 minutes, custom intervals, working-hour edges, weekends, UTC versus IST, resuming the next morning, missed-once, per-user isolation.
+
+Limitations: the scheduler is **in-process and single-process** (run one backend process, or set `SCHEDULER_ENABLED=false` on extras, otherwise reminders would repeat); notifications are polled, not pushed; working hours use one app-wide timezone and do not support overnight shifts.
 
 ## Layout
 
