@@ -5,6 +5,7 @@ from sqlmodel import Session
 from backend.clock import Clock, system_clock
 from backend.config import Settings, get_settings
 from backend.db import get_session
+from backend.mail.sender import EmailSender, default_sender
 from backend.models import User
 from backend.security import decode_access_token
 
@@ -13,6 +14,16 @@ _bearer = HTTPBearer(auto_error=False)
 
 def get_clock() -> Clock:
     return system_clock
+
+
+def get_llm():
+    from backend.organize.runtime import default_llm
+
+    return default_llm()
+
+
+def get_sender() -> EmailSender:
+    return default_sender()
 
 
 def get_graph():

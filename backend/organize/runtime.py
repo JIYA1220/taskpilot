@@ -20,9 +20,14 @@ def make_checkpointer(path: str) -> SqliteSaver:
 
 
 @lru_cache
+def default_llm() -> GroqLLM:
+    """The production LLM client: real Groq transport, every attempt recorded in the audit log."""
+    return GroqLLM(groq_transport(get_settings()), db_audit_sink(get_engine()))
+
+
+@lru_cache
 def default_graph():
-    """The production graph: real Groq transport, DB audit log, on-disk checkpoints."""
+    """The production graph: shared LLM client, on-disk checkpoints."""
     settings = get_settings()
-    llm = GroqLLM(groq_transport(settings), db_audit_sink(get_engine()))
-    deps = GraphDeps(llm, settings, load_directory(settings.directory_path), system_clock)
+    deps = GraphDeps(default_llm(), settings, load_directory(settings.directory_path), system_clock)
     return build_graph(deps, make_checkpointer(settings.checkpoint_db))

@@ -1,15 +1,18 @@
 from datetime import datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlmodel import Session, select
 
-from backend.api.deps import get_clock, get_current_user
+from backend.api.deps import get_clock, get_current_user, get_sender
 from backend.clock import Clock
 from backend.config import Settings, get_settings
 from backend.db import get_session
 from backend.directory import load_directory
+from backend.mail.outbox import process_outbox, queue_reviewer_event
+from backend.mail.sender import EmailSender
 from backend.models import ClarifyingQuestion, Task, User
 from backend.organize.schemas import Clarification, DependencyHint, Priority, TaskType
 
@@ -114,6 +117,8 @@ def set_status(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
     clock: Clock = Depends(get_clock),
+    settings: Settings = Depends(get_settings),
+    sender: EmailSender = Depends(get_sender),
 ) -> Task:
     task = session.get(Task, task_id)
     if task is None or task.owner_id != user.id:
@@ -122,10 +127,18 @@ def set_status(
         raise HTTPException(409, "The deadline has passed; you can only mark a missed task as done")
     if task.status == "blocked" and body.status != "done":
         raise HTTPException(409, "This task is blocked; resolve its dependency first")
+    now, tz = clock(), ZoneInfo(settings.timezone)
+    just_completed = body.status == "done" and task.status != "done"
     task.status = body.status
-    task.completed_at = clock() if body.status == "done" else None
+    task.completed_at = now if body.status == "done" else None
     session.add(task)
-    session.commit()
+    event = queue_reviewer_event(session, task, user, "completed", now, tz) if just_completed else None
+    session.commit()  # the status change and its email row are saved together
+    if event is not None:  # try to send straight away; if it fails it stays queued and is retried
+        process_outbox(
+            session, now, sender, tz,
+            max_attempts=settings.email_max_attempts, retry_base_seconds=settings.email_retry_base_seconds, only_ids=[event.id],
+        )
     session.refresh(task)
     return task
 

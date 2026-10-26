@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, select
 
+from backend.mail.outbox import queue_reviewer_event
 from backend.models import Notification, Task, User, UserPrefs
 
 PENDING = ("todo", "in_progress", "blocked")  # not done and not missed
@@ -85,6 +86,8 @@ def mark_missed(session: Session, now: datetime, tz: ZoneInfo) -> list[Task]:
                 created_at=now,
             )
         )
+        # Same transaction as the status change, so the status and its email cannot drift apart.
+        queue_reviewer_event(session, task, session.get(User, task.owner_id), "missed", now, tz)
     return list(overdue)
 
 
