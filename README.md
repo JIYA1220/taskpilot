@@ -13,7 +13,7 @@ Work in progress. Nothing below has been measured yet: **evaluation results: not
 | M0 Scaffolding, auth, demo organization | done |
 | M1 Organize (split, clarify, rewrite) | done (tested with a mocked LLM and tried by hand against Groq; accuracy: not yet measured) |
 | M2 Reminders and deadlines | done (fake-clock tests; in-app bell, settings and task buttons tried live; browser pop-ups implemented but not yet seen in a real browser) |
-| M3 Reviewer emails and approve-before-send | not started |
+| M3 Reviewer emails and approve-before-send | done for the local test inbox only (SMTP tested against a real local server; tried live end to end). **Real Gmail sending is not built yet** |
 | M4 Dependencies and schedule conflicts | not started |
 | M5 Team chat | not started |
 | M6 Evaluation on hand-labeled data | in progress: labeling guide, blind labeling tool and the 15 dev and 60 test notes exist; **no gold labels written yet; all results: not yet measured** |
@@ -82,6 +82,25 @@ Prompts are versioned files in [`backend/prompts/`](backend/prompts/). The date 
 - **Tests.** The logic in `backend/reminders.py` takes `now` as an argument, so the tests drive it with a fake clock: first reminder, 59 versus 60 minutes, custom intervals, working-hour edges, weekends, UTC versus IST, resuming the next morning, missed-once, per-user isolation.
 
 Limitations: the scheduler is **in-process and single-process** (run one backend process, or set `SCHEDULER_ENABLED=false` on extras, otherwise reminders would repeat); notifications are polled, not pushed; working hours use one app-wide timezone and do not support overnight shifts.
+
+## Email: reviewers and approve-before-send (Milestone 3)
+
+**What is built.** Everything goes through an `EmailSender` interface. The only implementation so far is `MailpitSender`, plain SMTP to a local inbox (Mailpit in Docker, or `python -m scripts.dev_mailbox`, a small stand-in on the same ports for machines without Docker). It uses the standard library's `smtplib` instead of `aiosmtplib`, because the app sends from ordinary threads and async would add nothing. `EMAIL_BACKEND=gmail` is deliberately **not available yet** and fails at startup with a clear message. No code in the repo can reach a real mailbox.
+
+**Reviewer emails.** A task can have a reviewer. When it is completed, or its deadline is missed, the reviewer gets an email with the title, problem statement, deadline and outcome ("completed late" is stated as such), and a footer "Sent by TaskPilot on behalf of <name>". If the reviewer is also a TaskPilot user they get an in-app notification too. Each event is sent **once**: the `email_event` table has a unique constraint on (task, kind), so a duplicate is impossible at the database level, not just in code.
+
+**The outbox.** The email is written to the database in the same transaction as the status change, and a separate step sends it. A failed send is retried with exponential backoff (1, 2, 4, 8 minutes by default, 5 attempts), shown under the task in the UI, and, if it finally fails, reported to the owner as a notification with a Retry button. Nothing is dropped silently. A row is claimed atomically before sending, so the request thread and the scheduler never send the same row, and a claim left by a crashed worker is released after 10 minutes. Delivery is **at-least-once**: a crash between "server accepted the mail" and "row marked sent" could repeat one email.
+
+**Email tasks: draft, approve, send.** For a task of type `email` the AI writes a draft; you edit it, then approve, edit or reject. Only an approved draft is sent. Sending marks the task done and notifies the reviewer.
+- **Who it goes to is decided by code, never by the model.** A person named in the title or your original note is matched to the directory (a full name, or a first name that identifies exactly one person). If nobody or several people match, you choose. The AI-written statement is only a fallback, and the reviewer is ignored there. An address you type is used exactly as typed and flagged as outside the directory.
+- **The draft prompt sees only the title, your original words and the goal**, not the rest of the AI-written statement. (A live test showed the model inventing "Meera has reviewed the report" from a later step in that statement.)
+- **No links or addresses in model text.** A draft containing a URL or an email address is rejected and the model is asked once to rewrite it; after that you write it by hand.
+- **No pretending to attach.** If a file would normally be attached, the draft ends with a `[Attach: ...]` line, and approval is blocked until you remove it, because TaskPilot cannot attach files.
+- **Task text is untrusted in emails.** HTML is escaped, subjects and names are flattened to one line (no header injection), and the templates add no links.
+
+**Auto-send, and why it is off by default.** An AI should not email people on your behalf without your say-so, so the default is: draft, then wait for approval. You can turn on "auto-send" in Settings. Even then it only sends a draft whose recipient was matched from the directory **and** whose address is exactly in the organization's domain (`ORG_DOMAIN`; look-alikes such as `evilacme.example.com` do not count). Anything outside the domain, without a recipient, with an `[Attach]` line or with an unusable AI draft always waits for you.
+
+Not built yet: the real Gmail sender, the recipient allowlist that will guard it, and the `make`-free login command for it. Those come in the next step.
 
 ## Layout
 
