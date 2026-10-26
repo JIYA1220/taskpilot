@@ -160,6 +160,42 @@ def show_stats(set_name: str, out: Output) -> None:
     out(f"{set_name}: {p.labeled} labeled, {p.flagged} flagged, {p.remaining} remaining of {p.total}")
 
 
+def describe(record: dict | None) -> str:
+    if record is None:
+        return "NOT LABELED"
+    if record["status"] == "flagged":
+        return f"FLAGGED ({record.get('notes') or 'no reason given'})"
+    return summarize(record).strip()
+
+
+def show_review(set_name: str, out: Output) -> None:
+    """Your own labels next to each note, for you to scan and correct. Nothing leaves your terminal."""
+    latest = store.latest_by_id(store.read_history(set_name))
+    for item in store.load_inputs(set_name):
+        out(f"{item['id']}  | {item['input'].replace(chr(10), ' / ')}")
+        out(f"        -> {describe(latest.get(item['id']))}")
+    out(f"\nTo change one: python -m eval.label_tool {set_name} --relabel <id>   (the old answer stays in the history)")
+
+
+def show_summary(set_name: str, out: Output) -> None:
+    """Counts of your answers. A pattern such as 'no deadline on any note' is worth a second look."""
+    latest = store.latest_by_id(store.read_history(set_name))
+    labeled = [r for r in latest.values() if r["status"] == "labeled"]
+    single = [r for r in labeled if r["n_tasks"] == 1]
+    out(f"{set_name}: {len(labeled)} labeled notes ({len(single)} single-task, {len(labeled) - len(single)} multi-task)")
+    for name, values in (
+        ("task type", [r["task_type"] for r in single]),
+        ("has a dependency", ["yes" if r["has_dependency"] else "no" for r in single]),
+        ("dependency direction", [r["dependency_direction"] for r in single]),
+        ("dependency team", [r["dependency_team"] for r in single]),
+        ("needs clarification", ["yes" if r["needs_clarification"] else "no" for r in single]),
+    ):
+        counts = {v: values.count(v) for v in sorted(set(values))}
+        out(f"  {name}: " + ", ".join(f"{v} x{n}" for v, n in counts.items()))
+    with_deadline = sum(1 for r in single if r["deadline"])
+    out(f"  deadline: {with_deadline} with a deadline, {len(single) - with_deadline} with none")
+
+
 def run(set_name: str, inp: Input = input, out: Output = print, relabel: str | None = None) -> None:
     items = store.load_inputs(set_name)
     latest = store.latest_by_id(store.read_history(set_name))
@@ -186,9 +222,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("set", choices=sorted(store.SETS))
     parser.add_argument("--stats", action="store_true", help="show progress and exit")
+    parser.add_argument("--review", action="store_true", help="print each note with your current label, to check your work")
+    parser.add_argument("--summary", action="store_true", help="print counts of your answers, to spot patterns")
     parser.add_argument("--relabel", metavar="ID", help="label one note again (the old label stays in the history)")
     args = parser.parse_args(argv)
-    if args.stats:
+    if args.review:
+        show_review(args.set, print)
+    elif args.summary:
+        show_summary(args.set, print)
+    elif args.stats:
         show_stats(args.set, print)
     else:
         run(args.set, relabel=args.relabel)

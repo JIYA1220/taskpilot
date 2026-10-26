@@ -210,6 +210,41 @@ def test_relabel_appends_a_new_revision_and_latest_wins(labeling):
     assert latest["task_type"] == "email" and latest["notes"] == "corrected"
 
 
+def test_review_shows_each_note_with_its_current_label_and_marks_the_unlabeled(labeling):
+    session(PLAIN + ["f", "unclear"])  # x001 labeled, x002 flagged, x003 untouched
+    lines = []
+    label_tool.show_review("x", lines.append)
+    text = "\n".join(lines)
+    assert "x001  | ask the payments team for the refund api documentation" in text
+    assert "1 task | type: normal | dependency: no | deadline: 2026-11-03T17:00:00+05:30 | needs clarification: no" in text
+    assert "FLAGGED (unclear)" in text and "NOT LABELED" in text
+    assert "--relabel <id>" in text
+
+
+def test_review_follows_a_relabel_and_shows_the_latest_answer(labeling):
+    session(PLAIN)
+    session(["1", "e", "n", "", "y", "", ""], relabel="x001")
+    lines = []
+    label_tool.show_review("x", lines.append)
+    assert "type: email" in "\n".join(lines) and "deadline: none | needs clarification: yes" in "\n".join(lines)
+
+
+def test_summary_counts_the_answers_so_a_pattern_is_visible(labeling):
+    session(PLAIN + ["1", "e", "y", "2", "2", "", "y", "", ""] + ["2", "", ""])
+    lines = []
+    label_tool.show_summary("x", lines.append)
+    text = "\n".join(lines)
+    assert "3 labeled notes (2 single-task, 1 multi-task)" in text
+    assert "task type: email x1, normal x1" in text and "has a dependency: no x1, yes x1" in text
+    assert "dependency team: none x1, payments x1" in text and "needs clarification: no x1, yes x1" in text
+    assert "deadline: 1 with a deadline, 1 with none" in text
+
+
+def test_review_and_summary_run_on_the_command_line(labeling, capsys):
+    assert label_tool.main(["x", "--review"]) == 0 and "NOT LABELED" in capsys.readouterr().out
+    assert label_tool.main(["x", "--summary"]) == 0 and "0 labeled notes" in capsys.readouterr().out
+
+
 def test_help_key_prints_the_rules(labeling):
     assert "SHORT RULES" in session(["?", "q"])
 

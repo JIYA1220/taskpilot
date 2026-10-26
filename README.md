@@ -72,6 +72,18 @@ Model output is requested in JSON mode and validated with Pydantic. On a validat
 
 Prompts are versioned files in [`backend/prompts/`](backend/prompts/). The date rules in them ("by 5" is 17:00 today or tomorrow if already past, a date alone is 23:59) are the conventions the evaluation's labeling guide will use.
 
+### Checking your labels before the evaluation
+
+Labels are the ground truth, so a systematic slip in them silently ruins the result (for example, leaving every deadline blank would reward any model that never outputs a deadline). Two read-only commands let the labeler check her own work privately; nothing is sent anywhere:
+
+```powershell
+python -m eval.label_tool test --summary   # counts of your answers: how many deadlines, dependencies, "needs clarification = yes"...
+python -m eval.label_tool test --review    # every note beside your current label, to scan and spot slips
+python -m eval.label_tool test --relabel t012   # change one (the earlier answer stays in the history)
+```
+
+Compare against the approved guide's tables (especially the deadline table and rules D1 to D6 and C1 to C4), not against anything an AI says. Relabeling is allowed any time before the freeze.
+
 ## Running the evaluation
 
 The order, and why:
