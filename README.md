@@ -14,7 +14,7 @@ Work in progress. Nothing below has been measured yet: **evaluation results: not
 | M1 Organize (split, clarify, rewrite) | done (tested with a mocked LLM and tried by hand against Groq; accuracy: not yet measured) |
 | M2 Reminders and deadlines | done (fake-clock tests; in-app bell, settings and task buttons tried live; browser pop-ups implemented but not yet seen in a real browser) |
 | M3 Reviewer emails and approve-before-send | done for the local test inbox only (SMTP tested against a real local server; tried live end to end). **Real Gmail sending is not built yet** |
-| M4 Dependencies and schedule conflicts | not started |
+| M4 Dependencies and schedule conflicts | done (tested with a mocked LLM and pure unit tests; tried live in the UI). Dependency detection accuracy: not yet measured |
 | M5 Team chat | not started |
 | M6 Evaluation on hand-labeled data | in progress: labeling guide, blind labeling tool and the 15 dev and 60 test notes exist; **no gold labels written yet; all results: not yet measured** |
 | M7 README, demo, deployment notes | not started |
@@ -101,6 +101,27 @@ Limitations: the scheduler is **in-process and single-process** (run one backend
 **Auto-send, and why it is off by default.** An AI should not email people on your behalf without your say-so, so the default is: draft, then wait for approval. You can turn on "auto-send" in Settings. Even then it only sends a draft whose recipient was matched from the directory **and** whose address is exactly in the organization's domain (`ORG_DOMAIN`; look-alikes such as `evilacme.example.com` do not count). Anything outside the domain, without a recipient, with an `[Attach]` line or with an unusable AI draft always waits for you.
 
 Not built yet: the real Gmail sender, the recipient allowlist that will guard it, and the `make`-free login command for it. Those come in the next step.
+
+## Dependencies and schedule conflicts (Milestone 4)
+
+Two kinds of conflict, both shown with a red flag on the task.
+
+**1. Dependency conflict (AI-assisted).** The extract step (Milestone 1) already says whether a task needs something from another team, or another team needs something from you. When such a task is saved:
+- A `Dependency` record is created (what is needed, which team, direction, by when, who you have already asked, and how the team was chosen).
+- **A task that needs something from another team becomes `blocked`.** Its owner is notified, and **its reviewer is emailed** that it is blocked and why (once per task, like the other reviewer emails).
+- **A task that another team is waiting on is not blocked.** You can act on it right now, so calling it blocked would be wrong; it gets the record, a notice and the red flag only. (This is a deliberate choice: the original idea grouped both cases under "blocked".)
+- You are asked three follow-up questions in the task card: what exactly is needed, by when, and who you have already asked. These are a plain form, not an AI call.
+- **Mark resolved** closes a dependency. The task is unblocked only when nothing else is blocking it.
+- If the AI missed one, **Flag a dependency the AI missed** adds it by hand, with the team chosen by you or worked out for you.
+
+**How the team is chosen.** First by keywords: each team's owned systems, its name and its members are matched against the task text. A word that several teams share (like "dashboard") counts for less, so it cannot decide on its own, and your own team is never a candidate. If one team clearly wins (a score of at least 1.0 and 1.5 times the runner-up), that is the answer and **no model is called**. Otherwise the **fast model** chooses among the top three candidates, and may answer "unknown" rather than guess. If the model cannot help, the extract step's own pick is the fallback. Which method decided (`keyword`, `llm`, `step_a`, `manual` or `none`) is stored with every dependency, along with the extract step's pick, so the evaluation can compare the methods.
+
+**2. Schedule conflict (plain rules, no AI).** Arithmetic on estimates and deadlines, so it is deterministic and explainable.
+- **Overload:** the estimated minutes of today's open tasks (those due today that you can work on, so not blocked, done or missed) exceed the working time left today. Working time comes from your Settings (start inclusive, end exclusive; zero on a day off or after hours). A task without an estimate counts as 0 minutes and is named in the message.
+- **P1 clash:** two or more P1 tasks with exactly the same deadline.
+- **Suggestions, never actions.** For an overload it suggests moving the largest P3 task first, then more P3 tasks only as needed, then P2 tasks only if P3 cannot free enough, **never a P1**, each to the same time on the next working day. The red box offers "Move to ..." (which you press, or ignore with "Keep as it is"). If even moving every P2 and P3 task would not fit, it says so. For a P1 clash it only names the clash and the shortest task.
+
+Limitations: team matching depends on the demo directory's keywords and a three-team shortlist; the extract step can miss or invent a dependency (not yet measured); a task's "today" uses estimates you or the AI entered, which are guesses; only one reviewer email per task and kind, so a second dependency does not email again; the overload rule only looks at today.
 
 ## Layout
 
