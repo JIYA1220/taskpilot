@@ -35,7 +35,9 @@ def _html_text(text: str) -> str:
     return "<br>".join(escape(line) for line in text.splitlines())
 
 
-def outcome_line(task: Task, kind: str, now: datetime, tz: ZoneInfo) -> str:
+def outcome_line(task: Task, kind: str, now: datetime, tz: ZoneInfo, detail: str = "") -> str:
+    if kind == "blocked":
+        return f"Blocked: {clean_header(detail, 300) or 'waiting on another team'}."
     if kind == "missed":
         if task.deadline is None:
             return "Deadline missed and the task is not done yet."
@@ -46,12 +48,12 @@ def outcome_line(task: Task, kind: str, now: datetime, tz: ZoneInfo) -> str:
     return f"Completed on {_when(done_at, tz)}" + (" (before the deadline)." if task.deadline else ".")
 
 
-def reviewer_email(task: Task, owner: User, kind: str, now: datetime, tz: ZoneInfo) -> tuple[str, str, str]:
-    """(subject, text, html) for the reviewer of a completed or missed task."""
+def reviewer_email(task: Task, owner: User, kind: str, now: datetime, tz: ZoneInfo, detail: str = "") -> tuple[str, str, str]:
+    """(subject, text, html) for the reviewer of a task that was completed, missed its deadline or got blocked."""
     title = clean_header(task.title, 120)
-    label = "Completed" if kind == "completed" else "Missed deadline"
+    label = {"completed": "Completed", "missed": "Missed deadline", "blocked": "Blocked"}[kind]
     subject = f"[TaskPilot] {label}: {title}"
-    outcome = outcome_line(task, kind, now, tz)
+    outcome = outcome_line(task, kind, now, tz, detail)
     deadline = _when(task.deadline, tz) if task.deadline else "none"
     statement = (task.problem_statement or "(no problem statement)")[:MAX_STATEMENT]
     owner_name = clean_header(owner.name, 100)

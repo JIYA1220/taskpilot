@@ -93,7 +93,11 @@ def mark_missed(session: Session, now: datetime, tz: ZoneInfo) -> list[Task]:
 
 def build_reminder(user_id: int, tasks: list[Task], now: datetime) -> Notification:
     listed = tasks[:MAX_LISTED]
-    lines = [f"- {t.priority} {t.title} ({format_time_left(t.deadline, now)})" for t in listed]
+    def state(t: Task) -> str:
+        left = format_time_left(t.deadline, now)
+        return f"blocked; {left}" if t.status == "blocked" else left
+
+    lines = [f"- {t.priority} {t.title} ({state(t)})" for t in listed]
     if len(tasks) > len(listed):
         lines.append(f"+{len(tasks) - len(listed)} more")
     count = len(tasks)

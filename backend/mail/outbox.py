@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 CLAIM_TIMEOUT = timedelta(minutes=10)
 BATCH = 50
-KIND_LABEL = {"completed": "completion", "missed": "missed-deadline", "draft": "task"}
+KIND_LABEL = {"completed": "completion", "missed": "missed-deadline", "blocked": "blocked-task", "draft": "task"}
 
 
 def queue_event(
@@ -47,25 +47,25 @@ def queue_event(
     return event
 
 
-def queue_reviewer_event(session: Session, task: Task, owner: User, kind: str, now: datetime, tz: ZoneInfo) -> EmailEvent | None:
-    """Email the task's reviewer about a completion or a missed deadline, and tell the
-    reviewer in-app if they are a TaskPilot user. Once per task and kind."""
-    if not task.reviewer_email or kind not in ("completed", "missed"):
+def queue_reviewer_event(
+    session: Session, task: Task, owner: User, kind: str, now: datetime, tz: ZoneInfo, detail: str = ""
+) -> EmailEvent | None:
+    """Email the task's reviewer about a completion, a missed deadline or a blocked task, and
+    tell the reviewer in-app if they are a TaskPilot user. Once per task and kind."""
+    if not task.reviewer_email or kind not in ("completed", "missed", "blocked"):
         return None
-    event = queue_event(session, task, kind, task.reviewer_email, render.reviewer_email(task, owner, kind, now, tz), now)
+    event = queue_event(session, task, kind, task.reviewer_email, render.reviewer_email(task, owner, kind, now, tz, detail), now)
     if event is None:
         return None
     reviewer = session.exec(select(User).where(User.email == task.reviewer_email.lower())).first()
     if reviewer is not None:
-        verb = "completed" if kind == "completed" else "missed the deadline for"
+        if kind == "blocked":
+            message = f'"{task.title}", which you are reviewing, is blocked: {detail or "waiting on another team"}.'
+        else:
+            verb = "completed" if kind == "completed" else "missed the deadline for"
+            message = f'{owner.name} {verb} "{task.title}", which you are reviewing.'
         session.add(
-            Notification(
-                user_id=reviewer.id,
-                kind=f"review_{kind}",
-                message=f'{owner.name} {verb} "{task.title}", which you are reviewing.',
-                payload={"task_id": task.id},
-                created_at=now,
-            )
+            Notification(user_id=reviewer.id, kind=f"review_{kind}", message=message, payload={"task_id": task.id}, created_at=now)
         )
     return event
 
