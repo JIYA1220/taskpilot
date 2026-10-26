@@ -67,6 +67,29 @@ class Task(SQLModel, table=True):
     )
 
 
+class Dependency(SQLModel, table=True):
+    """Something a task needs from another team (need_from_them), or something another team
+    needs from the task's owner (they_need_from_me)."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    task_id: int = Field(foreign_key="task.id", index=True)
+    depends_on_team_id: str | None = Field(default=None, foreign_key="team.id")  # None: team not identified yet
+    direction: str  # need_from_them or they_need_from_me
+    what_is_needed: str = ""
+    # Follow-up answers the person fills in: by when, and who they have already asked.
+    needed_by: datetime | None = Field(default=None, sa_column=Column(UTCDateTime, nullable=True))
+    already_asked: str = ""
+    state: str = "open"  # open or resolved
+    # How the team was chosen: keyword, llm, step_a (the extract step's own pick), manual, none.
+    match_method: str = "none"
+    hint_team: str | None = None  # what the extract step said, kept so the methods can be compared
+    match_candidates: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_column=Column(UTCDateTime, nullable=False)
+    )
+    resolved_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime, nullable=True))
+
+
 class ClarifyingQuestion(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     task_id: int = Field(foreign_key="task.id", index=True)
