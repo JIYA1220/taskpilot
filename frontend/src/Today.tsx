@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, Outcome, Proposed, Question, SavedTask } from "./api";
+import { formatDeadline, timeLeft } from "./time";
 
 const PRIORITY_STYLE: Record<string, string> = {
   P1: "bg-red-100 text-red-800",
@@ -7,16 +8,14 @@ const PRIORITY_STYLE: Record<string, string> = {
   P3: "bg-slate-200 text-slate-700",
 };
 
+const REFRESH_MS = 30_000;
+const STATUS_ORDER: Record<string, number> = { in_progress: 0, todo: 1, blocked: 2, missed: 3, done: 4 };
+
 function toLocalInput(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function formatDeadline(iso: string | null): string {
-  if (!iso) return "No deadline";
-  return new Date(iso).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
 function Badge({ priority }: { priority: string }) {
@@ -30,7 +29,34 @@ function dependencyLabel(t: { dependency_hint: { direction: string; team: string
   return d.direction === "need_from_them" ? `Needs from ${who}: ${d.what_is_needed}` : `${who} needs from you: ${d.what_is_needed}`;
 }
 
-export default function Today({ onUnauthorized }: { onUnauthorized: () => void }) {
+type TaskActionsProps = { task: SavedTask; busy: boolean; onStatus: (id: number, s: "todo" | "in_progress" | "done") => void };
+
+function TaskActions({ task, busy, onStatus }: TaskActionsProps) {
+  const btn = "rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50";
+  if (task.status === "done") {
+    return <button disabled={busy} className={btn} onClick={() => onStatus(task.id, "todo")}>Reopen</button>;
+  }
+  if (task.status === "missed") {
+    return <button disabled={busy} className={btn} onClick={() => onStatus(task.id, "done")}>Mark done (late)</button>;
+  }
+  return (
+    <span className="flex gap-1">
+      {task.status === "todo" && <button disabled={busy} className={btn} onClick={() => onStatus(task.id, "in_progress")}>Start</button>}
+      {task.status === "in_progress" && <button disabled={busy} className={btn} onClick={() => onStatus(task.id, "todo")}>Pause</button>}
+      <button disabled={busy} className={`${btn} border-green-600 text-green-800`} onClick={() => onStatus(task.id, "done")}>Done</button>
+    </span>
+  );
+}
+
+const STATUS_BADGE: Record<string, string> = {
+  in_progress: "bg-blue-100 text-blue-800",
+  blocked: "bg-orange-100 text-orange-800",
+  missed: "bg-red-600 text-white",
+  done: "bg-green-100 text-green-800",
+};
+
+export default function Today({ onUnauthorized, reloadSignal }: { onUnauthorized: () => void; reloadSignal: number }) {
+  const [now, setNow] = useState(Date.now());
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -58,7 +84,21 @@ export default function Today({ onUnauthorized }: { onUnauthorized: () => void }
   const refresh = useCallback(() => guard(() => api.listTasks()).then((t) => t && setSaved(t)), [guard]);
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  }, [refresh, reloadSignal]);
+
+  // Keep "time left" fresh and pick up tasks the scheduler marked as missed.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      api.listTasks().then(setSaved).catch(() => undefined);
+    }, REFRESH_MS);
+    return () => clearInterval(timer);
+  }, []);
+
+  async function changeStatus(id: number, status: "todo" | "in_progress" | "done") {
+    const updated = await guard(() => api.setStatus(id, status));
+    if (updated) setSaved((list) => list.map((t) => (t.id === id ? updated : t)));
+  }
 
   function receive(result: Outcome) {
     setOutcome(result);
@@ -284,12 +324,23 @@ export default function Today({ onUnauthorized }: { onUnauthorized: () => void }
           <p className="mt-2 text-sm text-slate-500">Nothing saved yet.</p>
         ) : (
           <ul className="mt-3 divide-y divide-slate-200 rounded-lg border border-slate-200">
-            {saved.map((t) => (
-              <li key={t.id} className="p-3">
-                <div className="flex items-center gap-2">
+            {[...saved]
+              .sort((a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9) || a.priority.localeCompare(b.priority) || a.id - b.id)
+              .map((t) => (
+              <li key={t.id} className={`p-3 ${t.status === "done" ? "opacity-60" : ""}`}>
+                <div className="flex flex-wrap items-center gap-2">
                   <Badge priority={t.priority} />
-                  <span className="font-medium text-slate-900">{t.title}</span>
-                  <span className="ml-auto text-xs text-slate-500">{formatDeadline(t.deadline)}</span>
+                  <span className={`font-medium text-slate-900 ${t.status === "done" ? "line-through" : ""}`}>{t.title}</span>
+                  {STATUS_BADGE[t.status] && (
+                    <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_BADGE[t.status]}`}>
+                      {t.status === "in_progress" ? "In progress" : t.status === "missed" ? "Missed" : t.status === "done" ? "Done" : "Blocked"}
+                    </span>
+                  )}
+                  <span className="ml-auto text-xs text-slate-500">
+                    {formatDeadline(t.deadline)}
+                    {t.deadline && t.status !== "done" && t.status !== "missed" && <> · {timeLeft(t.deadline, now)}</>}
+                  </span>
+                  <TaskActions task={t} busy={busy} onStatus={changeStatus} />
                 </div>
                 {dependencyLabel(t) && <p className="mt-1 text-xs text-red-700">{dependencyLabel(t)}</p>}
                 {t.problem_statement && <p className="mt-1 whitespace-pre-line text-xs text-slate-600">{t.problem_statement}</p>}

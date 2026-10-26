@@ -41,11 +41,33 @@ export type SavedTask = {
   priority: string;
   priority_reason: string;
   deadline: string | null;
-  status: string;
+  status: "todo" | "in_progress" | "blocked" | "done" | "missed";
   reviewer_email: string | null;
   dependency_hint: Dependency | null;
   needs_manual_review: boolean;
+  completed_at: string | null;
 };
+
+export type AppNotification = {
+  id: number;
+  kind: "reminder" | "missed" | string;
+  message: string;
+  payload: { total?: number; task_id?: number } | null;
+  read: boolean;
+  created_at: string;
+};
+
+export type NotificationList = { unread: number; items: AppNotification[] };
+
+export type Prefs = {
+  reminders_enabled: boolean;
+  interval_minutes: number;
+  work_start: string;
+  work_end: string;
+  work_days: number[];
+};
+
+export type PrefsOut = Prefs & { timezone: string; last_reminder_at: string | null };
 
 export type Me = { id: number; name: string; email: string; team_id: string };
 
@@ -87,12 +109,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     let detail = response.statusText;
     try {
       const body = await response.json();
-      detail = typeof body.detail === "string" ? body.detail : "The request was not valid.";
+      if (typeof body.detail === "string") detail = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0]?.msg) detail = String(body.detail[0].msg).replace(/^Value error, /, "");
+      else detail = "The request was not valid.";
     } catch {
       /* keep statusText */
     }
     throw new ApiError(response.status, detail);
   }
+  if (response.status === 204) return undefined as T;
   return response.json();
 }
 
@@ -107,4 +132,11 @@ export const api = {
     request<Outcome>(`/api/organize/${encodeURIComponent(threadId)}/answers`, post({ answers })),
   saveTasks: (tasks: Proposed[]) => request<SavedTask[]>("/api/tasks", post({ tasks })),
   listTasks: () => request<SavedTask[]>("/api/tasks"),
+  setStatus: (id: number, status: "todo" | "in_progress" | "done") =>
+    request<SavedTask>(`/api/tasks/${id}/status`, post({ status })),
+  notifications: () => request<NotificationList>("/api/notifications"),
+  markRead: (id: number) => request<void>(`/api/notifications/${id}/read`, { method: "POST" }),
+  markAllRead: () => request<void>("/api/notifications/read-all", { method: "POST" }),
+  getPrefs: () => request<PrefsOut>("/api/settings/reminders"),
+  putPrefs: (prefs: Prefs) => request<PrefsOut>("/api/settings/reminders", { method: "PUT", body: JSON.stringify(prefs) }),
 };
