@@ -2,12 +2,17 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session
 
+from backend.clock import Clock, system_clock
 from backend.config import Settings, get_settings
 from backend.db import get_session
 from backend.models import User
 from backend.security import decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
+
+
+def get_clock() -> Clock:
+    return system_clock
 
 
 def get_graph():

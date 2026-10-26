@@ -1,10 +1,12 @@
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlmodel import Session, select
 
-from backend.api.deps import get_current_user
+from backend.api.deps import get_clock, get_current_user
+from backend.clock import Clock
 from backend.config import Settings, get_settings
 from backend.db import get_session
 from backend.directory import load_directory
@@ -56,6 +58,7 @@ class TaskOut(BaseModel):
     dependency_hint: dict | None
     needs_manual_review: bool
     created_at: datetime
+    completed_at: datetime | None
 
 
 @router.post("", response_model=list[TaskOut], status_code=201)
@@ -97,6 +100,34 @@ def save_tasks(
     for task in saved:
         session.refresh(task)
     return saved
+
+
+class StatusIn(BaseModel):
+    # `blocked` and `missed` are set by the system (dependencies, deadlines), never by hand.
+    status: Literal["todo", "in_progress", "done"]
+
+
+@router.post("/{task_id}/status", response_model=TaskOut)
+def set_status(
+    task_id: int,
+    body: StatusIn,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+    clock: Clock = Depends(get_clock),
+) -> Task:
+    task = session.get(Task, task_id)
+    if task is None or task.owner_id != user.id:
+        raise HTTPException(404, "No such task")
+    if task.status == "missed" and body.status != "done":
+        raise HTTPException(409, "The deadline has passed; you can only mark a missed task as done")
+    if task.status == "blocked" and body.status != "done":
+        raise HTTPException(409, "This task is blocked; resolve its dependency first")
+    task.status = body.status
+    task.completed_at = clock() if body.status == "done" else None
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+    return task
 
 
 @router.get("", response_model=list[TaskOut])
