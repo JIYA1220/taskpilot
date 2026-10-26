@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from backend.api import auth, emails, meta, notifications, organize, tasks
+from backend.api import auth, conflicts, emails, meta, notifications, organize, tasks
 from backend.config import get_settings
 from backend.db import get_engine, init_db
 from backend.mail.sender import default_sender
@@ -33,3 +33,4 @@ app.include_router(organize.router)
 app.include_router(tasks.router)
 app.include_router(notifications.router)
 app.include_router(emails.router)
+app.include_router(conflicts.router)

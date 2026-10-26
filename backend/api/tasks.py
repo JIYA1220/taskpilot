@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlmodel import Session, select
 
-from backend.api.deps import get_clock, get_current_user, get_sender
+from backend.api.deps import get_clock, get_current_user, get_llm, get_sender
 from backend.clock import Clock
 from backend.config import Settings, get_settings
+from backend.conflicts.dependency import register_dependency
 from backend.db import get_session
 from backend.directory import load_directory
+from backend.llm import GroqLLM
 from backend.mail.outbox import process_outbox, queue_reviewer_event
 from backend.mail.sender import EmailSender
 from backend.models import ClarifyingQuestion, Task, User
@@ -70,15 +72,19 @@ def save_tasks(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
     settings: Settings = Depends(get_settings),
+    llm: GroqLLM = Depends(get_llm),
+    sender: EmailSender = Depends(get_sender),
+    clock: Clock = Depends(get_clock),
 ) -> list[Task]:
-    team_ids = load_directory(settings.directory_path).team_ids()
+    directory = load_directory(settings.directory_path)
+    team_ids = directory.team_ids()
     for item in body.tasks:
         if item.dependency_hint:  # same team-id rule as for model output
             try:
                 DependencyHint.model_validate(item.dependency_hint.model_dump(), context={"team_ids": team_ids})
             except ValueError as exc:
                 raise HTTPException(422, "dependency_hint.team is not a known team") from exc
-    saved = []
+    saved: list[tuple[TaskIn, Task]] = []
     for item in body.tasks:
         task = Task(
             owner_id=user.id,
@@ -98,11 +104,32 @@ def save_tasks(
         session.flush()
         for c in item.clarifications:
             session.add(ClarifyingQuestion(task_id=task.id, question=c.question, answer=c.answer))
-        saved.append(task)
+        saved.append((item, task))
     session.commit()
-    for task in saved:
+
+    # A task that needs something from another team (or that another team is waiting on) gets a
+    # dependency record. One that needs something is blocked, and its reviewer is told.
+    now, tz = clock(), ZoneInfo(settings.timezone)
+    events = []
+    for item, task in saved:
+        hint = item.dependency_hint
+        if hint and hint.direction != "none":
+            _, event = register_dependency(
+                session, task, user, direction=hint.direction, what=hint.what_is_needed, hint_team=hint.team,
+                directory=directory, now=now, tz=tz, llm=llm, settings=settings,
+            )
+            if event is not None:
+                events.append(event)
+    session.commit()
+    if events:
+        process_outbox(
+            session, now, sender, tz,
+            max_attempts=settings.email_max_attempts, retry_base_seconds=settings.email_retry_base_seconds, only_ids=[e.id for e in events],
+        )
+    tasks = [task for _, task in saved]
+    for task in tasks:
         session.refresh(task)
-    return saved
+    return tasks
 
 
 class StatusIn(BaseModel):
