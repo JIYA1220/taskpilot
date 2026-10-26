@@ -88,7 +88,7 @@ TEST = [
     ("vague", "finish the thing before the demo"),
     ("vague", "ask legal to review the new terms"),
     ("vague", "get approval for the budget from finance"),
-    ("vague", "send it to him asap"),
+    ("vague", "clean up the old stuff"),  # replaced: the original note was flagged as ambiguous (see eval/design/REWRITES.md)
     # hard negatives and robustness
     ("trap", "read the refund api docs"),
     ("trap", "call the vendor to renegotiate the support contract"),
