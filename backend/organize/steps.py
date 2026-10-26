@@ -49,6 +49,16 @@ def describe_directory(directory: Directory) -> str:
 # ---- Step A -----------------------------------------------------------------
 
 
+def build_extract_message(settings: Settings, directory: Directory, user_team_id: str, raw_text: str, now: datetime) -> str:
+    """The user message for Step A. Shared with the evaluation so its token estimates use the real prompt."""
+    return (
+        f"Current date and time: {describe_now(now, settings.timezone)}\n"
+        f"The person's own team: {user_team_id}\n"
+        f"Teams (use these ids for dependency.team):\n{describe_directory(directory)}\n\n"
+        f"<notes>\n{raw_text}\n</notes>"
+    )
+
+
 def extract_tasks(
     llm: GroqLLM,
     settings: Settings,
@@ -57,12 +67,7 @@ def extract_tasks(
     raw_text: str,
     now: datetime,
 ) -> tuple[list[ExtractedTask], list[str]]:
-    user = (
-        f"Current date and time: {describe_now(now, settings.timezone)}\n"
-        f"The person's own team: {user_team_id}\n"
-        f"Teams (use these ids for dependency.team):\n{describe_directory(directory)}\n\n"
-        f"<notes>\n{raw_text}\n</notes>"
-    )
+    user = build_extract_message(settings, directory, user_team_id, raw_text, now)
     result = llm.generate(
         model=settings.groq_main_model,
         prompt=load_prompt("extract"),
