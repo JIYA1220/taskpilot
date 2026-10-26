@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     email_allowlist: str = ""
     mailpit_host: str = "localhost"
     mailpit_port: int = 1025
+    mail_from: str = "taskpilot@acme.example.com"
+    # A failed send is retried with exponential backoff: base, 2x base, 4x base ...
+    email_max_attempts: int = 5
+    email_retry_base_seconds: int = 60
 
     # In-process scheduler: how often it looks for missed deadlines and due reminders.
     # Turn it off (SCHEDULER_ENABLED=false) if you ever run more than one process.

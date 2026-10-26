@@ -28,7 +28,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+# aiosmtpd is a local SMTP server: tests use it to exercise the real SMTP code path, and
+# scripts/dev_mailbox.py uses it as a stand-in for Mailpit when Docker is not available.
+dev = ["pytest>=8", "aiosmtpd>=1.4"]
 
 [tool.setuptools.packages.find]
 include = ["backend*", "scripts*", "eval*"]

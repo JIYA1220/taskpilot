@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Column, DateTime
+from sqlalchemy import JSON, Column, DateTime, UniqueConstraint
 from sqlalchemy.types import TypeDecorator
 from sqlmodel import Field, SQLModel
 
@@ -98,6 +98,52 @@ class Notification(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=utcnow, sa_column=Column(UTCDateTime, nullable=False)
     )
+
+
+class EmailEvent(SQLModel, table=True):
+    """The outbox. One row per email the system must send; the unique constraint makes
+    'once per task and kind' a database guarantee, not just a code habit. The rendered
+    content is stored so every retry sends exactly the same message."""
+
+    __table_args__ = (UniqueConstraint("task_id", "kind", name="uq_email_task_kind"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    task_id: int = Field(foreign_key="task.id", index=True)
+    kind: str  # completed, missed, draft (an approved email task); blocked arrives in Milestone 4
+    recipient: str
+    subject: str
+    body_text: str
+    body_html: str
+    state: str = "pending"  # pending, sending, sent, failed
+    attempts: int = 0
+    next_attempt_at: datetime = Field(
+        default_factory=utcnow, sa_column=Column(UTCDateTime, nullable=False)
+    )
+    claimed_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime, nullable=True))
+    sent_at: datetime | None = Field(default=None, sa_column=Column(UTCDateTime, nullable=True))
+    last_error: str = ""
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_column=Column(UTCDateTime, nullable=False)
+    )
+
+
+class EmailDraft(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    task_id: int = Field(foreign_key="task.id", index=True)
+    to_email: str | None = None
+    to_source: str = ""  # directory (matched from the task text) or user (typed or chosen by the person)
+    subject: str = ""
+    body: str = ""
+    state: str = "draft"  # draft, approved, sent, rejected
+    needs_manual_review: bool = False  # the AI draft could not be used
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_column=Column(UTCDateTime, nullable=False)
+    )
+
+
+class EmailPrefs(SQLModel, table=True):
+    user_id: int = Field(foreign_key="user.id", primary_key=True)
+    auto_send_enabled: bool = False  # off unless the person turns it on
 
 
 class AuditLog(SQLModel, table=True):
