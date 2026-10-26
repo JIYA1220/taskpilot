@@ -3,12 +3,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from backend.api.deps import get_sender
+from backend.api.deps import get_llm, get_sender
 from backend.config import Settings, get_settings
 from backend.db import get_session
 from backend.directory import seed_directory
+from backend.llm import GroqLLM
 from backend.main import app
-from backend.tests.fakes import FakeSender
+from backend.tests.fakes import FakeSender, NoNetwork
 
 DEMO_PASSWORD = "test-password-123"
 
@@ -55,5 +56,6 @@ def client(engine, settings, sender):
     app.dependency_overrides[get_session] = _session
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_sender] = lambda: sender
+    app.dependency_overrides[get_llm] = lambda: GroqLLM(NoNetwork())  # tests opt in to LLM calls explicitly
     yield TestClient(app)
     app.dependency_overrides.clear()

@@ -9,16 +9,28 @@ from backend.llm import RawCompletion
 FIXED_NOW = datetime(2026, 11, 2, 3, 30, tzinfo=UTC)
 
 
-class FakeTransport:
-    """Replies are queued per prompt kind ("extract", "rewrite" or "draft"); the last one repeats."""
+class NoNetwork:
+    """The default LLM in API tests: any call is a test bug, so fail loudly instead of reaching Groq."""
 
-    def __init__(self, extract=(), rewrite=(), draft=()):
-        self.queues = {"extract": list(extract), "rewrite": list(rewrite), "draft": list(draft)}
+    def __call__(self, model, messages, max_tokens):
+        raise AssertionError("this test made an unexpected LLM call; give it a FakeTransport")
+
+
+class FakeTransport:
+    """Replies are queued per prompt kind ("extract", "rewrite", "draft" or "match"); the last one repeats."""
+
+    def __init__(self, extract=(), rewrite=(), draft=(), match=()):
+        self.queues = {"extract": list(extract), "rewrite": list(rewrite), "draft": list(draft), "match": list(match)}
         self.calls: list[dict] = []
 
     def __call__(self, model, messages, max_tokens) -> RawCompletion:
         system = messages[0]["content"]
-        kind = "extract" if system.startswith("You turn") else "draft" if system.startswith("You draft") else "rewrite"
+        kind = (
+            "extract" if system.startswith("You turn")
+            else "draft" if system.startswith("You draft")
+            else "match" if system.startswith("You pick")
+            else "rewrite"
+        )
         self.calls.append({"kind": kind, "model": model, "messages": [dict(m) for m in messages]})
         queue = self.queues[kind]
         reply = queue.pop(0) if len(queue) > 1 else queue[0]
