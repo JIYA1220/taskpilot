@@ -229,7 +229,8 @@ def test_tool_never_imports_the_app_or_any_model_code():
         assert not any(name.startswith(("backend", "openai", "langgraph", "httpx")) for name in imported), imported
 
 
-def test_a_real_session_never_shows_categories_or_design_files():
+def test_a_real_session_never_shows_categories_or_design_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "LABEL_DIR", tmp_path / "labels")  # a fresh, empty label folder, whatever is labeled for real
     categories = set(COVERAGE["test"].values())
     text = session(["q"], set_name="test")
     shown_words = set(text.replace("_", " _ ").split())
