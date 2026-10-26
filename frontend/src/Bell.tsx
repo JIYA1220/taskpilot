@@ -3,6 +3,13 @@ import { ApiError, api, AppNotification } from "./api";
 import { lastShownId, permission, requestPermission, setLastShownId, show, Permission } from "./browserNotify";
 
 const POLL_MS = 20_000;
+const KIND_LABEL: Record<string, string> = {
+  reminder: "Reminder",
+  missed: "Missed",
+  review_completed: "To review",
+  review_missed: "To review",
+  email_failed: "Email failed",
+};
 
 function ago(iso: string): string {
   const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
@@ -122,9 +129,11 @@ export default function Bell({ onUnauthorized, onNew }: Props) {
               <li key={n.id} className={`border-b border-slate-100 px-3 py-2 ${n.read ? "bg-white" : "bg-indigo-50/50"}`}>
                 <div className="flex items-center gap-2 text-xs text-slate-500">
                   <span
-                    className={`rounded px-1.5 py-0.5 font-semibold ${n.kind === "missed" ? "bg-red-100 text-red-800" : "bg-slate-200 text-slate-700"}`}
+                    className={`rounded px-1.5 py-0.5 font-semibold ${
+                      n.kind === "missed" || n.kind === "email_failed" ? "bg-red-100 text-red-800" : n.kind.startsWith("review_") ? "bg-indigo-100 text-indigo-800" : "bg-slate-200 text-slate-700"
+                    }`}
                   >
-                    {n.kind === "missed" ? "Missed" : "Reminder"}
+                    {KIND_LABEL[n.kind] ?? "Notice"}
                   </span>
                   <span>{ago(n.created_at)}</span>
                   {!n.read && (

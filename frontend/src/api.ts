@@ -71,6 +71,34 @@ export type PrefsOut = Prefs & { timezone: string; last_reminder_at: string | nu
 
 export type Me = { id: number; name: string; email: string; team_id: string };
 
+export type Draft = {
+  id: number;
+  task_id: number;
+  to_email: string | null;
+  to_source: string;
+  subject: string;
+  body: string;
+  state: "draft" | "approved" | "sent" | "rejected";
+  needs_manual_review: boolean;
+};
+
+export type EmailEvent = {
+  id: number;
+  task_id: number;
+  kind: "completed" | "missed" | "draft" | string;
+  recipient: string;
+  subject: string;
+  state: "pending" | "sending" | "sent" | "failed";
+  attempts: number;
+  next_attempt_at: string;
+  last_error: string;
+  sent_at: string | null;
+};
+
+export type EmailSettings = { auto_send_enabled: boolean; org_domain: string };
+
+export type DirectoryTeam = { id: string; name: string; members: { id: number; name: string; email: string }[] };
+
 const TOKEN_KEY = "taskpilot_token";
 
 export function getToken(): string | null {
@@ -137,6 +165,18 @@ export const api = {
   notifications: () => request<NotificationList>("/api/notifications"),
   markRead: (id: number) => request<void>(`/api/notifications/${id}/read`, { method: "POST" }),
   markAllRead: () => request<void>("/api/notifications/read-all", { method: "POST" }),
+  directory: () => request<DirectoryTeam[]>("/api/directory"),
+  createDraft: (taskId: number) => request<Draft>(`/api/tasks/${taskId}/draft`, { method: "POST" }),
+  getDraft: (taskId: number) => request<Draft | null>(`/api/tasks/${taskId}/draft`),
+  saveDraft: (taskId: number, draft: { to_email: string | null; subject: string; body: string }) =>
+    request<Draft>(`/api/tasks/${taskId}/draft`, { method: "PUT", body: JSON.stringify(draft) }),
+  approveDraft: (taskId: number) => request<Draft>(`/api/tasks/${taskId}/draft/approve`, { method: "POST" }),
+  rejectDraft: (taskId: number) => request<Draft>(`/api/tasks/${taskId}/draft/reject`, { method: "POST" }),
+  listEmails: () => request<EmailEvent[]>("/api/emails"),
+  retryEmail: (id: number) => request<EmailEvent>(`/api/emails/${id}/retry`, { method: "POST" }),
+  getEmailSettings: () => request<EmailSettings>("/api/settings/email"),
+  putEmailSettings: (auto_send_enabled: boolean) =>
+    request<EmailSettings>("/api/settings/email", { method: "PUT", body: JSON.stringify({ auto_send_enabled }) }),
   getPrefs: () => request<PrefsOut>("/api/settings/reminders"),
   putPrefs: (prefs: Prefs) => request<PrefsOut>("/api/settings/reminders", { method: "PUT", body: JSON.stringify(prefs) }),
 };

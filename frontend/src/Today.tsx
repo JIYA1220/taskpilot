@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, Outcome, Proposed, Question, SavedTask } from "./api";
+import { api, ApiError, EmailEvent, Outcome, Proposed, Question, SavedTask } from "./api";
+import DraftPanel from "./DraftPanel";
 import { formatDeadline, timeLeft } from "./time";
 
 const PRIORITY_STYLE: Record<string, string> = {
@@ -48,6 +49,33 @@ function TaskActions({ task, busy, onStatus }: TaskActionsProps) {
   );
 }
 
+const EMAIL_LABEL: Record<string, string> = { completed: "Completion email to reviewer", missed: "Missed-deadline email to reviewer", draft: "Email" };
+
+/** What happened to each email tied to a task. Failures are shown, never hidden, and can be retried. */
+function EmailStatus({ events, onRetry, busy }: { events: EmailEvent[]; onRetry: (id: number) => void; busy: boolean }) {
+  if (events.length === 0) return null;
+  return (
+    <ul className="mt-2 space-y-0.5">
+      {events.map((e) => {
+        const label = EMAIL_LABEL[e.kind] ?? "Email";
+        if (e.state === "sent") return <li key={e.id} className="text-xs text-green-800">{label}: sent to {e.recipient}</li>;
+        if (e.state === "failed")
+          return (
+            <li key={e.id} className="text-xs text-red-700">
+              {label} to {e.recipient} failed ({e.last_error}).{" "}
+              <button disabled={busy} onClick={() => onRetry(e.id)} className="font-semibold underline disabled:opacity-50">Retry</button>
+            </li>
+          );
+        return (
+          <li key={e.id} className="text-xs text-amber-800">
+            {label} to {e.recipient}: not delivered yet{e.attempts > 0 ? ` (attempt ${e.attempts} failed${e.last_error ? `: ${e.last_error}` : ""}), retrying automatically` : ", sending soon"}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 const STATUS_BADGE: Record<string, string> = {
   in_progress: "bg-blue-100 text-blue-800",
   blocked: "bg-orange-100 text-orange-800",
@@ -81,23 +109,39 @@ export default function Today({ onUnauthorized, reloadSignal }: { onUnauthorized
     [onUnauthorized],
   );
 
-  const refresh = useCallback(() => guard(() => api.listTasks()).then((t) => t && setSaved(t)), [guard]);
+  const [emails, setEmails] = useState<EmailEvent[]>([]);
+  const [draftOpen, setDraftOpen] = useState<number | null>(null);
+
+  const refresh = useCallback(async () => {
+    const tasks = await guard(() => api.listTasks());
+    if (tasks) setSaved(tasks);
+    api.listEmails().then(setEmails).catch(() => undefined);
+  }, [guard]);
   useEffect(() => {
     refresh();
   }, [refresh, reloadSignal]);
 
-  // Keep "time left" fresh and pick up tasks the scheduler marked as missed.
+  // Keep "time left" fresh, and pick up missed tasks and email progress from the scheduler.
   useEffect(() => {
     const timer = setInterval(() => {
       setNow(Date.now());
       api.listTasks().then(setSaved).catch(() => undefined);
+      api.listEmails().then(setEmails).catch(() => undefined);
     }, REFRESH_MS);
     return () => clearInterval(timer);
   }, []);
 
+  async function retryEmail(id: number) {
+    await guard(() => api.retryEmail(id));
+    refresh();
+  }
+
   async function changeStatus(id: number, status: "todo" | "in_progress" | "done") {
     const updated = await guard(() => api.setStatus(id, status));
-    if (updated) setSaved((list) => list.map((t) => (t.id === id ? updated : t)));
+    if (updated) {
+      setSaved((list) => list.map((t) => (t.id === id ? updated : t)));
+      api.listEmails().then(setEmails).catch(() => undefined); // completing may have queued the reviewer's email
+    }
   }
 
   function receive(result: Outcome) {
@@ -260,7 +304,7 @@ export default function Today({ onUnauthorized, reloadSignal }: { onUnauthorized
                 {t.needs_manual_review && (
                   <p className="mt-1 text-xs font-medium text-amber-700">Needs manual review: the AI answer could not be used for this task.</p>
                 )}
-                {t.task_type === "email" && <p className="mt-1 text-xs text-indigo-700">Email task (drafting and approval come in a later milestone)</p>}
+                {t.task_type === "email" && <p className="mt-1 text-xs text-indigo-700">Email task: after you save it you can have a draft written and approve it before anything is sent</p>}
                 {dependencyLabel(t) && <p className="mt-1 text-xs text-red-700">{dependencyLabel(t)}</p>}
                 <textarea
                   value={t.problem_statement}
@@ -343,7 +387,20 @@ export default function Today({ onUnauthorized, reloadSignal }: { onUnauthorized
                   <TaskActions task={t} busy={busy} onStatus={changeStatus} />
                 </div>
                 {dependencyLabel(t) && <p className="mt-1 text-xs text-red-700">{dependencyLabel(t)}</p>}
+                {t.reviewer_email && <p className="mt-1 text-xs text-slate-500">Reviewer: {t.reviewer_email}</p>}
                 {t.problem_statement && <p className="mt-1 whitespace-pre-line text-xs text-slate-600">{t.problem_statement}</p>}
+                <EmailStatus events={emails.filter((e) => e.task_id === t.id)} onRetry={retryEmail} busy={busy} />
+                {t.task_type === "email" && t.status !== "done" && (
+                  <>
+                    <button
+                      onClick={() => setDraftOpen(draftOpen === t.id ? null : t.id)}
+                      className="mt-2 rounded border border-indigo-300 px-2 py-0.5 text-xs text-indigo-800 hover:bg-indigo-50"
+                    >
+                      {draftOpen === t.id ? "Hide email draft" : "Email draft"}
+                    </button>
+                    {draftOpen === t.id && <DraftPanel taskId={t.id} onChanged={refresh} onUnauthorized={onUnauthorized} />}
+                  </>
+                )}
               </li>
             ))}
           </ul>

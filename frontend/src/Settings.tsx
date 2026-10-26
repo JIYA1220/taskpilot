@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { ApiError, api, Prefs } from "./api";
+import { ApiError, api, EmailSettings, Prefs } from "./api";
 import { permission, requestPermission, Permission } from "./browserNotify";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -10,6 +10,22 @@ export default function Settings({ onUnauthorized }: { onUnauthorized: () => voi
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [perm, setPerm] = useState<Permission>(permission());
+  const [email, setEmail] = useState<EmailSettings | null>(null);
+  const [emailMessage, setEmailMessage] = useState("");
+
+  useEffect(() => {
+    api.getEmailSettings().then(setEmail).catch(() => undefined);
+  }, []);
+
+  async function toggleAutoSend(on: boolean) {
+    setEmailMessage("");
+    try {
+      setEmail(await api.putEmailSettings(on));
+      setEmailMessage(on ? "Auto-send is on." : "Auto-send is off.");
+    } catch {
+      setEmailMessage("Could not change this setting.");
+    }
+  }
 
   useEffect(() => {
     api
@@ -116,6 +132,25 @@ export default function Settings({ onUnauthorized }: { onUnauthorized: () => voi
             Enable browser notifications
           </button>
         )}
+      </section>
+
+      <section>
+        <h2 className="text-lg font-semibold text-slate-900">Email</h2>
+        <p className="text-sm text-slate-600">
+          By default TaskPilot writes a draft for an email task and waits for you to approve it. An AI should not email people on your behalf without your say-so.
+        </p>
+        {email && (
+          <label className="mt-3 flex items-start gap-2 text-sm text-slate-800">
+            <input type="checkbox" className="mt-1" checked={email.auto_send_enabled} onChange={(e) => toggleAutoSend(e.target.checked)} />
+            <span>
+              <span className="font-medium">Auto-send drafts to colleagues</span>
+              <span className="block text-xs text-slate-600">
+                Off by default. When on, a draft addressed to someone at <strong>{email.org_domain}</strong> is sent immediately, without asking. Anything addressed outside {email.org_domain}, or with no recipient found, always waits for your approval.
+              </span>
+            </span>
+          </label>
+        )}
+        {emailMessage && <p role="status" className="mt-1 text-xs text-slate-600">{emailMessage}</p>}
       </section>
 
       <div className="flex items-center gap-3">
