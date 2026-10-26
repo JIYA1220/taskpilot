@@ -20,6 +20,8 @@ data/
 
 # eval caches (LLM responses are re-creatable and can be large)
 eval/cache/
+# development-set runs are for tuning prompts; only the frozen test run is a result
+eval/results/dev/
 
 # node / frontend
 node_modules/

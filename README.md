@@ -16,7 +16,7 @@ Work in progress. Nothing below has been measured yet: **evaluation results: not
 | M3 Reviewer emails and approve-before-send | done for the local test inbox only (SMTP tested against a real local server; tried live end to end). **Real Gmail sending is not built yet** |
 | M4 Dependencies and schedule conflicts | done (tested with a mocked LLM and pure unit tests; tried live in the UI). Dependency detection accuracy: not yet measured |
 | M5 Team chat | not started |
-| M6 Evaluation on hand-labeled data | in progress: labeling guide, blind labeling tool and the 15 dev and 60 test notes exist; **no gold labels written yet; all results: not yet measured** |
+| M6 Evaluation on hand-labeled data | in progress: labeling guide, blind labeling tool, the 15 dev and 60 test notes, and the runner, scoring and freeze are built and tested with a scripted fake model; **no gold labels written yet; all results: not yet measured** |
 | M7 README, demo, deployment notes | not started |
 
 ## Run it
@@ -71,6 +71,30 @@ notes ──► Step A: extract (main model) ──► Step B: clarify (code) �
 Model output is requested in JSON mode and validated with Pydantic. On a validation failure the model gets one retry with the error message; after that the task falls back to "needs manual review" instead of crashing. A reviewer address is only ever taken from the person's own answer or the directory, never from model output. Every LLM attempt is recorded in an audit table (model, prompt version, latency, tokens, parsed ok), never the key or the message text.
 
 Prompts are versioned files in [`backend/prompts/`](backend/prompts/). The date rules in them ("by 5" is 17:00 today or tomorrow if already past, a date alone is 23:59) are the conventions the evaluation's labeling guide will use.
+
+## Running the evaluation
+
+The order, and why:
+
+1. **Label** the dev notes, then the test notes, by hand (`python -m eval.label_tool dev`, then `test`). Nothing below can produce a reported number without them.
+2. **Tune prompts on the dev set only.** `python -m eval.run_eval run --set dev` is free to run as often as you like (its output goes to `eval/results/dev/`, which git ignores, and is labeled "NOT a reported result").
+3. **Commit everything, then freeze:** `python -m eval.freeze`. It refuses unless every test note is labeled and every file the result depends on is committed, then records their exact committed identities (prompts, matcher and extraction code, the directory, the test notes, the labels, the scoring code and the runner) in `eval/results/freeze.json`.
+4. **Check the cost first:** `python -m eval.run_eval estimate --set test --daily-token-cap N` (N from the Groq console) says how many tokens and calls the run needs and whether it fits in a day.
+5. **Run once:** `python -m eval.run_eval run --set test`. It refuses to start if the freeze no longer holds, so a prompt, code or label change forces a new freeze, and the earlier results are kept under `eval/results/superseded/` with a note that they are superseded.
+
+What a run does: every note goes through the app's real extraction step and team matcher with **both** models (each doing every job), at temperature 0 against the fixed reference time. Every reply is cached (`eval/cache/`, git-ignored), keyed on the model, the full prompt, the date and the settings, so a stopped run resumes where it stopped and a rerun costs nothing. A rate-limit, quota or network error stops the run cleanly with exit code 3. It is never scored as a wrong answer. It reports how many API calls it made and the cache hit rate.
+
+**Metrics** (each with a 95% interval: Wilson for proportions, a percentile bootstrap over notes for F1, medians, p95 and means), written to `eval/results/metrics.json` and `summary.md`:
+- JSON valid on the first try, and after the one retry.
+- Task type accuracy, deadline exact match (same instant), and task-count match on the multi-task notes.
+- Dependency detection: precision, recall, F1, and direction accuracy among the true positives. A "predicted dependency" is any task whose dependency direction is not `none`.
+- **Team routing, top-1,** on single-task notes whose gold dependency names a directory team, for three methods on the same notes: keyword-only (the best team; a tie or no evidence counts as wrong), the extract step's own pick, and keyword evidence plus the model (the matcher the app actually uses).
+- Needs clarification (predicted = the model asked at least one question): accuracy, precision, recall.
+- Latency (median and p95 of the extract call; latency is the original call's, reused on cached reruns), and mean tokens per note and per predicted task, with reasoning tokens shown separately.
+
+`eval/ERROR_ANALYSIS.md` lists every wrong note for the main model with a factual one-line category per wrong field, and counts by category. No explanations are written.
+
+**Scope.** Per-task metrics use only the notes labeled as a single task (50 of the 60 test notes), so the intervals rest on n=50 and are wide. For those notes the model's first predicted task is compared with the gold label, and a different number of tasks is counted as a task-count error. Other limits: one person labeled everything; the demo organization and notes are synthetic; the two models are two sizes of one family; the notes were written by the assistant that also wrote the prompts, although the prompts are not tuned on the test notes.
 
 ## Reminders and deadlines (Milestone 2)
 
