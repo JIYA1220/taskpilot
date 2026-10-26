@@ -65,7 +65,7 @@ export default function App() {
           </button>
         </div>
       </header>
-      {tab === "today" ? <Today onUnauthorized={logout} reloadSignal={reload} /> : <Settings onUnauthorized={logout} />}
+      {tab === "today" ? <Today onUnauthorized={logout} reloadSignal={reload} ownTeam={me.team_id} /> : <Settings onUnauthorized={logout} />}
     </main>
   );
 }

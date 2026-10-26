@@ -19,6 +19,9 @@ export function title(n: AppNotification): string {
     return `TaskPilot: ${total} pending task${total === 1 ? "" : "s"}`;
   }
   if (n.kind === "missed") return "TaskPilot: deadline missed";
+  if (n.kind === "blocked") return "TaskPilot: a task is blocked";
+  if (n.kind === "unblocked") return "TaskPilot: a task is unblocked";
+  if (n.kind === "dependency") return "TaskPilot: another team is waiting on you";
   if (n.kind.startsWith("review_")) return "TaskPilot: a task you review";
   if (n.kind === "email_failed") return "TaskPilot: an email could not be sent";
   return "TaskPilot";

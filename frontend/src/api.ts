@@ -97,6 +97,34 @@ export type EmailEvent = {
 
 export type EmailSettings = { auto_send_enabled: boolean; org_domain: string };
 
+export type DependencyItem = {
+  id: number;
+  task_id: number;
+  depends_on_team_id: string | null;
+  team_name: string;
+  direction: "need_from_them" | "they_need_from_me";
+  what_is_needed: string;
+  needed_by: string | null;
+  already_asked: string;
+  state: "open" | "resolved";
+  match_method: string;
+  hint_team: string | null;
+  created_at: string;
+  resolved_at: string | null;
+};
+
+export type ConflictSuggestion = { task_id: number; title: string; priority: string; estimated_minutes: number; proposed_deadline: string };
+
+export type Conflict = {
+  kind: "overload" | "p1_clash" | string;
+  message: string;
+  task_ids: number[];
+  minutes_needed: number | null;
+  minutes_available: number | null;
+  suggestions: ConflictSuggestion[];
+  untimed_task_ids: number[];
+};
+
 export type DirectoryTeam = { id: string; name: string; members: { id: number; name: string; email: string }[] };
 
 const TOKEN_KEY = "taskpilot_token";
@@ -166,6 +194,14 @@ export const api = {
   markRead: (id: number) => request<void>(`/api/notifications/${id}/read`, { method: "POST" }),
   markAllRead: () => request<void>("/api/notifications/read-all", { method: "POST" }),
   directory: () => request<DirectoryTeam[]>("/api/directory"),
+  listDependencies: () => request<DependencyItem[]>("/api/dependencies"),
+  addDependency: (taskId: number, body: { direction: string; what_is_needed: string; team_id: string | null }) =>
+    request<DependencyItem>(`/api/tasks/${taskId}/dependencies`, post(body)),
+  updateDependency: (id: number, body: { what_is_needed: string; needed_by: string | null; already_asked: string; team_id: string | null }) =>
+    request<DependencyItem>(`/api/dependencies/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  resolveDependency: (id: number) => request<DependencyItem>(`/api/dependencies/${id}/resolve`, { method: "POST" }),
+  listConflicts: () => request<Conflict[]>("/api/conflicts"),
+  moveDeadline: (taskId: number, deadline: string) => request<SavedTask>(`/api/tasks/${taskId}/deadline`, post({ deadline })),
   createDraft: (taskId: number) => request<Draft>(`/api/tasks/${taskId}/draft`, { method: "POST" }),
   getDraft: (taskId: number) => request<Draft | null>(`/api/tasks/${taskId}/draft`),
   saveDraft: (taskId: number, draft: { to_email: string | null; subject: string; body: string }) =>

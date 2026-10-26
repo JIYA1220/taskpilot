@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, EmailEvent, Outcome, Proposed, Question, SavedTask } from "./api";
+import { api, ApiError, Conflict, ConflictSuggestion, DependencyItem, DirectoryTeam, EmailEvent, Outcome, Proposed, Question, SavedTask } from "./api";
+import Conflicts, { conflictKey } from "./Conflicts";
+import DependencyPanel from "./DependencyPanel";
 import DraftPanel from "./DraftPanel";
-import { formatDeadline, timeLeft } from "./time";
+import { formatDeadline, timeLeft, toLocalInput } from "./time";
 
 const PRIORITY_STYLE: Record<string, string> = {
   P1: "bg-red-100 text-red-800",
@@ -11,13 +13,6 @@ const PRIORITY_STYLE: Record<string, string> = {
 
 const REFRESH_MS = 30_000;
 const STATUS_ORDER: Record<string, number> = { in_progress: 0, todo: 1, blocked: 2, missed: 3, done: 4 };
-
-function toLocalInput(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 function Badge({ priority }: { priority: string }) {
   return <span className={`rounded px-2 py-0.5 text-xs font-semibold ${PRIORITY_STYLE[priority] ?? ""}`}>{priority}</span>;
@@ -49,7 +44,12 @@ function TaskActions({ task, busy, onStatus }: TaskActionsProps) {
   );
 }
 
-const EMAIL_LABEL: Record<string, string> = { completed: "Completion email to reviewer", missed: "Missed-deadline email to reviewer", draft: "Email" };
+const EMAIL_LABEL: Record<string, string> = {
+  completed: "Completion email to reviewer",
+  missed: "Missed-deadline email to reviewer",
+  blocked: "Blocked-task email to reviewer",
+  draft: "Email",
+};
 
 /** What happened to each email tied to a task. Failures are shown, never hidden, and can be retried. */
 function EmailStatus({ events, onRetry, busy }: { events: EmailEvent[]; onRetry: (id: number) => void; busy: boolean }) {
@@ -83,7 +83,7 @@ const STATUS_BADGE: Record<string, string> = {
   done: "bg-green-100 text-green-800",
 };
 
-export default function Today({ onUnauthorized, reloadSignal }: { onUnauthorized: () => void; reloadSignal: number }) {
+export default function Today({ onUnauthorized, reloadSignal, ownTeam }: { onUnauthorized: () => void; reloadSignal: number; ownTeam: string }) {
   const [now, setNow] = useState(Date.now());
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -111,25 +111,44 @@ export default function Today({ onUnauthorized, reloadSignal }: { onUnauthorized
 
   const [emails, setEmails] = useState<EmailEvent[]>([]);
   const [draftOpen, setDraftOpen] = useState<number | null>(null);
+  const [deps, setDeps] = useState<DependencyItem[]>([]);
+  const [conflicts, setConflicts] = useState<Conflict[]>([]);
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [teams, setTeams] = useState<DirectoryTeam[]>([]);
+
+  // Everything that can change without the person doing anything: tasks (missed, blocked), emails, dependencies, conflicts.
+  const loadAround = useCallback(() => {
+    api.listEmails().then(setEmails).catch(() => undefined);
+    api.listDependencies().then(setDeps).catch(() => undefined);
+    api.listConflicts().then(setConflicts).catch(() => undefined);
+  }, []);
 
   const refresh = useCallback(async () => {
     const tasks = await guard(() => api.listTasks());
     if (tasks) setSaved(tasks);
-    api.listEmails().then(setEmails).catch(() => undefined);
-  }, [guard]);
+    loadAround();
+  }, [guard, loadAround]);
   useEffect(() => {
     refresh();
   }, [refresh, reloadSignal]);
+  useEffect(() => {
+    api.directory().then(setTeams).catch(() => undefined);
+  }, []);
 
-  // Keep "time left" fresh, and pick up missed tasks and email progress from the scheduler.
+  // Keep "time left" fresh, and pick up changes made by the scheduler.
   useEffect(() => {
     const timer = setInterval(() => {
       setNow(Date.now());
       api.listTasks().then(setSaved).catch(() => undefined);
-      api.listEmails().then(setEmails).catch(() => undefined);
+      loadAround();
     }, REFRESH_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [loadAround]);
+
+  async function moveTask(s: ConflictSuggestion) {
+    await guard(() => api.moveDeadline(s.task_id, s.proposed_deadline));
+    refresh();
+  }
 
   async function retryEmail(id: number) {
     await guard(() => api.retryEmail(id));
@@ -140,7 +159,7 @@ export default function Today({ onUnauthorized, reloadSignal }: { onUnauthorized
     const updated = await guard(() => api.setStatus(id, status));
     if (updated) {
       setSaved((list) => list.map((t) => (t.id === id ? updated : t)));
-      api.listEmails().then(setEmails).catch(() => undefined); // completing may have queued the reviewer's email
+      loadAround(); // completing may have queued the reviewer's email and changed the schedule
     }
   }
 
@@ -362,6 +381,14 @@ export default function Today({ onUnauthorized, reloadSignal }: { onUnauthorized
         </section>
       )}
 
+      <Conflicts
+        conflicts={conflicts}
+        dismissed={dismissed}
+        busy={busy}
+        onDismiss={(key) => setDismissed((s) => new Set(s).add(key))}
+        onMove={moveTask}
+      />
+
       <section>
         <h2 className="text-lg font-semibold text-slate-900">Your tasks</h2>
         {saved.length === 0 ? (
@@ -386,9 +413,20 @@ export default function Today({ onUnauthorized, reloadSignal }: { onUnauthorized
                   </span>
                   <TaskActions task={t} busy={busy} onStatus={changeStatus} />
                 </div>
-                {dependencyLabel(t) && <p className="mt-1 text-xs text-red-700">{dependencyLabel(t)}</p>}
+                {conflicts.some((c) => c.task_ids.includes(t.id) && !dismissed.has(conflictKey(c))) && t.status !== "done" && (
+                  <p className="mt-1 text-xs font-semibold text-red-700">Schedule conflict: see the red box above.</p>
+                )}
                 {t.reviewer_email && <p className="mt-1 text-xs text-slate-500">Reviewer: {t.reviewer_email}</p>}
                 {t.problem_statement && <p className="mt-1 whitespace-pre-line text-xs text-slate-600">{t.problem_statement}</p>}
+                <DependencyPanel
+                  taskId={t.id}
+                  taskOpen={t.status === "todo" || t.status === "in_progress" || t.status === "blocked"}
+                  deps={deps.filter((d) => d.task_id === t.id)}
+                  teams={teams}
+                  ownTeam={ownTeam}
+                  onChanged={refresh}
+                  onUnauthorized={onUnauthorized}
+                />
                 <EmailStatus events={emails.filter((e) => e.task_id === t.id)} onRetry={retryEmail} busy={busy} />
                 {t.task_type === "email" && t.status !== "done" && (
                   <>

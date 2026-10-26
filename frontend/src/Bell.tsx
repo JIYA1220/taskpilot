@@ -8,7 +8,11 @@ const KIND_LABEL: Record<string, string> = {
   missed: "Missed",
   review_completed: "To review",
   review_missed: "To review",
+  review_blocked: "To review",
   email_failed: "Email failed",
+  blocked: "Blocked",
+  dependency: "Waiting on you",
+  unblocked: "Unblocked",
 };
 
 function ago(iso: string): string {
@@ -130,7 +134,7 @@ export default function Bell({ onUnauthorized, onNew }: Props) {
                 <div className="flex items-center gap-2 text-xs text-slate-500">
                   <span
                     className={`rounded px-1.5 py-0.5 font-semibold ${
-                      n.kind === "missed" || n.kind === "email_failed" ? "bg-red-100 text-red-800" : n.kind.startsWith("review_") ? "bg-indigo-100 text-indigo-800" : "bg-slate-200 text-slate-700"
+                      ["missed", "email_failed", "blocked", "dependency"].includes(n.kind) ? "bg-red-100 text-red-800" : n.kind === "unblocked" ? "bg-green-100 text-green-800" : n.kind.startsWith("review_") ? "bg-indigo-100 text-indigo-800" : "bg-slate-200 text-slate-700"
                     }`}
                   >
                     {KIND_LABEL[n.kind] ?? "Notice"}
