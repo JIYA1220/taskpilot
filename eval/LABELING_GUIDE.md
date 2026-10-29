@@ -1,6 +1,6 @@
 # Labeling guide, version 2 (lean evaluation)
 
-> **DRAFT, waiting for approval. Do not start labeling until this is approved.** This replaces version 1 for the lean evaluation (10 dev notes, 30 test notes). Version 1 and the labels written under it are archived in `eval/archive/full_v1/`.
+> **Version 2 approved as written on 30 October 2026** (approval relayed to the assistant in chat). Any later change to a rule needs a new version and relabeling of the affected notes. This replaces version 1 for the lean evaluation (10 dev notes, 30 test notes). Version 1 and the labels written under it are archived in `eval/archive/full_v1/`.
 
 What changed from version 1: there are now only **three** labels per note (task type, dependency, deadline). Every note is a **single task**, so there is no task-count label, and there is no "needs clarification" label. The rules for the three remaining labels are the same as in version 1, with one simplification: a dependency is always on a team in the directory.
 
