@@ -16,7 +16,7 @@ Work in progress. Nothing below has been measured yet: **evaluation results: not
 | M3 Reviewer emails and approve-before-send | done for the local test inbox only (SMTP tested against a real local server; tried live end to end). **Real Gmail sending is not built yet** |
 | M4 Dependencies and schedule conflicts | done (tested with a mocked LLM and pure unit tests; tried live in the UI). Dependency detection accuracy: not yet measured |
 | M5 Team chat | not started |
-| M6 Evaluation on hand-labeled data | in progress: labeling guide, blind labeling tool, the 15 dev and 60 test notes, and the runner, scoring and freeze are built and tested with a scripted fake model; **no gold labels written yet; all results: not yet measured** |
+| M6 Evaluation on hand-labeled data | in progress, re-scoped to a lean design (10 dev + 30 test notes, three labels each): notes, blind labeling tool, runner, scoring and freeze are built and tested with a scripted fake model; the version 2 labeling guide **awaits approval**; **no gold labels yet; all results: not yet measured** |
 | M7 README, demo, deployment notes | not started |
 
 ## Run it
@@ -55,7 +55,14 @@ python -m eval.label_tool test --stats   # labeling progress
 
 ## Evaluation data and labeling
 
-The evaluation uses 15 dev notes (for prompt tuning) and 60 test notes (never used for tuning), in [`eval/dev.jsonl`](eval/dev.jsonl) and [`eval/dataset.jsonl`](eval/dataset.jsonl). The notes were written by an AI assistant, not by the evaluated models. **Every gold label is written by a person** with [`eval/label_tool.py`](eval/label_tool.py), which shows only the note text, and follows [`eval/LABELING_GUIDE.md`](eval/LABELING_GUIDE.md). Labels are stored append-only with timestamps and revision numbers in `eval/labels/`. Fifty of the test notes contain one task each and ten contain several; per-task metrics are scored on the fifty single-task notes only, so the confidence intervals rest on n=50.
+The evaluation is deliberately **lean**. It uses **10 dev notes** (for prompt tuning) and **30 test notes** (never used for tuning), all single-task, in [`eval/dev.jsonl`](eval/dev.jsonl) and [`eval/dataset.jsonl`](eval/dataset.jsonl). The test set was designed to contain at least 10 notes with a dependency on another team (at least 3 of them in the reverse direction), about 8 email tasks and at least 8 notes with a relative deadline, plus some hard negatives (a team or system merely mentioned, an external vendor, "urgent" with no deadline, an embedded instruction aimed at the AI). The notes were written by an AI assistant, not by the evaluated models.
+
+**Every gold label is written by a person** with [`eval/label_tool.py`](eval/label_tool.py), which shows only the note text, and follows [`eval/LABELING_GUIDE.md`](eval/LABELING_GUIDE.md) (version 2). There are exactly **three labels per note**: task type, dependency (none, or a team plus a direction) and deadline. Labels are stored append-only with timestamps and revision numbers in `eval/labels/`.
+
+**What this evaluation does not measure, stated plainly:**
+- **The clarifying questions the app asks are not evaluated**, and neither is **splitting a note into several tasks**. Both are in the product; neither is measured here. (An earlier, larger design that also covered them was dropped; it is archived in `eval/archive/full_v1/`, is not used, and none of it is a result.)
+- **n = 30 gives wide confidence intervals.** An observed 80% on 30 notes is compatible with a true rate from the high 60s to the low 90s, and a difference of a few notes between the two models is within noise.
+- **Team routing rests on only about 10 notes** (the ones with a dependency), so its intervals are wider still. The three routing methods are a rough comparison, not a ranking.
 
 ## How Organize works (Milestone 1)
 
@@ -74,15 +81,15 @@ Prompts are versioned files in [`backend/prompts/`](backend/prompts/). The date 
 
 ### Checking your labels before the evaluation
 
-Labels are the ground truth, so a systematic slip in them silently ruins the result (for example, leaving every deadline blank would reward any model that never outputs a deadline). Two read-only commands let the labeler check her own work privately; nothing is sent anywhere:
+Labels are the ground truth, so a systematic slip in them silently ruins the result (for example, leaving every deadline blank would reward any model that never outputs a deadline). Read-only commands let the labeler check her own work privately; nothing is sent anywhere:
 
 ```powershell
-python -m eval.label_tool test --summary   # counts of your answers: how many deadlines, dependencies, "needs clarification = yes"...
+python -m eval.label_tool test --summary   # counts of your answers: how many deadlines, how many dependencies and in which direction...
 python -m eval.label_tool test --review    # every note beside your current label, to scan and spot slips
-python -m eval.label_tool test --relabel t012   # change one (the earlier answer stays in the history)
+python -m eval.label_tool test --relabel t07   # change one (the earlier answer stays in the history)
 ```
 
-Compare against the approved guide's tables (especially the deadline table and rules D1 to D6 and C1 to C4), not against anything an AI says. Relabeling is allowed any time before the freeze.
+Compare against the approved guide's tables (especially the deadline table and rules D1 to D7), not against anything an AI says. Relabeling is allowed any time before the freeze.
 
 ## Running the evaluation
 
@@ -98,15 +105,14 @@ What a run does: every note goes through the app's real extraction step and team
 
 **Metrics** (each with a 95% interval: Wilson for proportions, a percentile bootstrap over notes for F1, medians, p95 and means), written to `eval/results/metrics.json` and `summary.md`:
 - JSON valid on the first try, and after the one retry.
-- Task type accuracy, deadline exact match (same instant), and task-count match on the multi-task notes.
+- Task type accuracy and deadline exact match (same instant).
 - Dependency detection: precision, recall, F1, and direction accuracy among the true positives. A "predicted dependency" is any task whose dependency direction is not `none`.
-- **Team routing, top-1,** on single-task notes whose gold dependency names a directory team, for three methods on the same notes: keyword-only (the best team; a tie or no evidence counts as wrong), the extract step's own pick, and keyword evidence plus the model (the matcher the app actually uses).
-- Needs clarification (predicted = the model asked at least one question): accuracy, precision, recall.
-- Latency (median and p95 of the extract call; latency is the original call's, reused on cached reruns), and mean tokens per note and per predicted task, with reasoning tokens shown separately.
+- **Team routing, top-1,** on the notes whose gold names a directory team (about 10), for three methods on the same notes: keyword-only (the best team; a tie or no evidence counts as wrong), the extract step's own pick, and keyword evidence plus the model (the matcher the app actually uses).
+- Latency (median and p95 of the extract call; latency is the original call's, reused on cached reruns), and mean tokens per note, with reasoning tokens shown separately.
 
 `eval/ERROR_ANALYSIS.md` lists every wrong note for the main model with a factual one-line category per wrong field, and counts by category. No explanations are written.
 
-**Scope.** Per-task metrics use only the notes labeled as a single task (50 of the 60 test notes), so the intervals rest on n=50 and are wide. For those notes the model's first predicted task is compared with the gold label, and a different number of tasks is counted as a task-count error. Other limits: one person labeled everything; the demo organization and notes are synthetic; the two models are two sizes of one family; the notes were written by the assistant that also wrote the prompts, although the prompts are not tuned on the test notes.
+**Scope and limits.** Clarifying questions and task splitting are not evaluated (see above). If the model returns several tasks for a note, its first task is the one compared with the gold label. n = 30 gives wide intervals and routing rests on about 10 notes. Other limits: one person labeled everything; the demo organization and notes are synthetic; the two models are two sizes of one family; the notes were written by the assistant that also wrote the prompts, although the prompts are not tuned on the test notes.
 
 ## Reminders and deadlines (Milestone 2)
 
