@@ -19,35 +19,42 @@ SETTINGS = Settings(_env_file=None, app_env="test", groq_api_key="not-a-real-key
 DIRECTORY = load_directory(SETTINGS.directory_path)
 MODELS = ["model-a", "model-b"]
 FIVE_PM = "2026-11-02T17:00:00+05:30"
+TUE_END = "2026-11-03T23:59:00+05:30"
 
 NOTES = {
     "n1": "ask the payments team for the refund api documentation",
     "n2": "send the weekly report to ravi by 5",
-    "n3": "follow up on that",
-    "n4": "fix the typo; email aarav the notes",
+    "n3": "update the readme",
+    "n4": "fix the typo tomorrow",
 }
 ITEMS = [{"id": i, "input": text} for i, text in NOTES.items()]
 
 
-def one(title, task_type="normal", dep=("none", "none", ""), deadline=None, unknowns=0):
+def one(title, task_type="normal", dep=("none", "none", ""), deadline=None):
     return {
         "title": title, "source_text": title, "task_type": task_type, "deadline": deadline, "estimated_minutes": None,
         "dependency": {"direction": dep[0], "team": dep[1], "what_is_needed": dep[2]},
-        "unknowns": [{"field": "scope", "question": "What do you mean?", "suggestions": []}] * unknowns,
+        "unknowns": [],
     }
 
 
 REPLIES = {
     NOTES["n1"]: {"tasks": [one("Ask payments for the refund API", dep=("need_from_them", "payments", "refund API documentation"))]},
     NOTES["n2"]: {"tasks": [one("Send the weekly report", "email", deadline=FIVE_PM)]},
-    NOTES["n3"]: {"tasks": [one("Follow up", unknowns=1)]},
-    NOTES["n4"]: {"tasks": [one("Fix the typo"), one("Email Aarav the notes", "email")]},
+    NOTES["n3"]: {"tasks": [one("Update the readme")]},
+    NOTES["n4"]: {"tasks": [one("Fix the typo", deadline=TUE_END)]},
 }
+
+
+def label(task_type="normal", dep=None, deadline=None):
+    return {"task_type": task_type, "dependency": {"team": dep[0], "direction": dep[1]} if dep else None, "deadline": deadline}
+
+
 GOLD = {
-    "n1": {"n_tasks": 1, "task_type": "normal", "has_dependency": True, "dependency_direction": "need_from_them", "dependency_team": "payments", "deadline": None, "needs_clarification": False},
-    "n2": {"n_tasks": 1, "task_type": "email", "has_dependency": False, "dependency_direction": "none", "dependency_team": "none", "deadline": FIVE_PM, "needs_clarification": False},
-    "n3": {"n_tasks": 1, "task_type": "normal", "has_dependency": False, "dependency_direction": "none", "dependency_team": "none", "deadline": None, "needs_clarification": True},
-    "n4": {"n_tasks": 2},
+    "n1": label(dep=("payments", "need_from_them")),
+    "n2": label("email", deadline=FIVE_PM),
+    "n3": label(),
+    "n4": label(deadline=TUE_END),
 }
 
 
@@ -101,13 +108,11 @@ def test_keyword_only_routing_answers_only_when_there_is_a_single_best_team():
 @pytest.mark.parametrize(
     "predicted_dep,gold,expected",
     [
-        (False, {"n_tasks": 1, "has_dependency": True, "dependency_team": "payments"}, True),  # even if the model found nothing
-        (False, {"n_tasks": 1, "has_dependency": True, "dependency_team": "unknown"}, False),
-        (True, {"n_tasks": 1, "has_dependency": False, "dependency_team": "none"}, True),  # a false alarm is still routed
-        (True, {"n_tasks": 3}, False),  # multi-task notes are never routed
+        (False, {"dependency": {"team": "payments", "direction": "need_from_them"}}, True),  # even if the model found nothing
+        (False, {"dependency": None}, False),
+        (True, {"dependency": None}, True),  # a false alarm is still routed
         (True, None, True),  # no labels: follow the model
         (False, None, False),
-        (False, {"n_tasks": 1, "has_dependency": False, "dependency_team": "none"}, False),
     ],
 )
 def test_which_notes_get_the_routing_comparison(predicted_dep, gold, expected):
@@ -120,7 +125,7 @@ def test_which_notes_get_the_routing_comparison(predicted_dep, gold, expected):
 def test_a_model_that_returned_no_task_still_gets_routed_when_the_gold_has_a_team():
     from eval.predict import wants_routing
 
-    gold = {"n_tasks": 1, "has_dependency": True, "dependency_team": "data"}
+    gold = {"dependency": {"team": "data", "direction": "they_need_from_me"}}
     assert wants_routing(None, gold, DIRECTORY.team_ids()) is True
     assert wants_routing(None, None, DIRECTORY.team_ids()) is False
 
@@ -159,7 +164,7 @@ def test_without_gold_labels_routing_follows_what_the_model_found(paths):
 
 def test_the_matcher_asks_the_model_when_keywords_are_not_decisive(paths):
     replies = {**REPLIES, NOTES["n3"]: {"tasks": [one("Fix the dashboard", dep=("need_from_them", "unknown", "dashboard fix"))]}}
-    gold = {**GOLD, "n3": {**GOLD["n3"], "has_dependency": True, "dependency_team": "data", "dependency_direction": "need_from_them"}}
+    gold = {**GOLD, "n3": label(dep=("data", "need_from_them"))}
     t, ledger, fake = transport(paths, FakeModel(replies))
     run_eval.run_models(["model-a"], ITEMS, gold, DIRECTORY, SETTINGS, t, paths, announce=lambda *_: None)
     route = run_eval.read_predictions(paths, "model-a")["n3"]["routing"]
@@ -219,20 +224,19 @@ def document(paths, set_name="dev", freeze_record=None, replies=REPLIES):
 
 def test_the_documents_carry_numbers_provenance_and_the_wrong_notes(paths, monkeypatch):
     monkeypatch.setattr(store, "label_path", lambda s: paths.results / "no-labels.jsonl")
-    wrong = {**REPLIES, NOTES["n3"]: {"tasks": [one("Follow up")]}}  # asks no question where the gold says it should
+    wrong = {**REPLIES, NOTES["n3"]: {"tasks": [one("Update the readme", deadline=TUE_END)]}}  # invents a deadline
     doc, errors = document(paths, replies=wrong)
     a = doc["models"]["model-a"]
-    assert (a["counts"]["items_scored"], a["counts"]["single_task_items"], a["counts"]["multi_task_items"]) == (4, 3, 1)
-    assert a["task_type_accuracy"]["k"] == 3 and a["json_valid_first_try"]["k"] == 4
-    assert a["task_count"]["multi_exact_match"]["k"] == 1
-    assert [e["id"] for e in errors] == ["n3"] and errors[0]["categories"][0].startswith("needs-clarification: gold yes")
+    assert a["counts"]["items_scored"] == 4 and a["counts"]["items_with_a_gold_dependency"] == 1
+    assert a["task_type_accuracy"]["k"] == 4 and a["json_valid_first_try"]["k"] == 4 and a["deadline_exact_match"]["k"] == 3
+    assert [e["id"] for e in errors] == ["n3"] and errors[0]["categories"][0].startswith("deadline: none expected")
     prov = doc["provenance"]
-    assert prov["n_scored"] == 4 and prov["labeled_by"] == "human via eval/label_tool.py" and prov["freeze_id"] is None
+    assert prov["n_scored"] == 4 and prov["n_with_dependency"] == 1 and prov["labeled_by"] == "human via eval/label_tool.py"
+    assert prov["freeze_id"] is None and prov["ledger"]["api_calls_made"] == 8
     assert set(prov["prompt_sha256"]) >= {"extract.v1.md", "rewrite.v1.md", "match_team.v1.md"}
-    assert prov["ledger"]["api_calls_made"] == 8
 
 
-def test_written_reports_state_what_they_are(paths, monkeypatch):
+def test_written_reports_state_what_they_are_and_what_they_are_not(paths, monkeypatch):
     monkeypatch.setattr(store, "label_path", lambda s: paths.results / "no-labels.jsonl")
     doc, errors = document(paths)
     run_eval.write_reports(doc, errors, MODELS, paths)
@@ -243,6 +247,10 @@ def test_written_reports_state_what_they_are(paths, monkeypatch):
     assert "| Task type accuracy | 100.0%" in summary and "Wilson interval" in summary and "Limitations" in summary
     assert "written by hand by Jiya" in summary and "No label came from an AI" in summary
     assert "API calls actually made this session:** 8" in summary
+    # the statements the lean design promises
+    assert "Not evaluated:" in summary and "clarifying questions" in summary and "splitting a note" in summary
+    assert "n = 4 notes gives wide intervals" in summary and "Routing rests on only 1 notes" in summary
+    assert "Needs clarification" not in summary and "Task splitting" not in summary and "Task count" not in summary
     analysis = (paths.results / "ERROR_ANALYSIS.md").read_text()
     assert "Model analysed: `model-a`" in analysis and "0 of 4 notes" in analysis and "- None." in analysis
 
@@ -254,7 +262,7 @@ def test_the_test_set_summary_names_the_freeze(paths, monkeypatch):
     run_eval.write_reports(doc, errors, MODELS, paths)
     summary = (paths.results / "summary.md").read_text()
     assert summary.startswith("# Evaluation results") and "NOT a reported result" not in summary
-    assert "freeze `abc123def4` at commit `0123456789`" in summary
+    assert "freeze `abc123def4` at commit `0123456789`" in summary and "(version 2)" in summary
 
 
 # ---- the estimate -------------------------------------------------------------
@@ -268,7 +276,7 @@ def test_the_estimate_uses_the_real_prompt_and_an_honest_guess_before_anything_i
     est = estimate(paths)
     for v in est["per_model"].values():
         assert v["new_extract_calls"] == 4 and v["already_cached"] == 0 and v["completion_basis"].startswith("default guess")
-        assert v["matcher_calls_at_most"] == 1  # only n1 has a gold dependency on a directory team
+        assert v["matcher_calls_at_most"] == 1  # only n1 has a gold dependency
         assert v["estimated_tokens"] > 4 * run_eval.DEFAULT_COMPLETION_TOKENS
     assert est["estimated_total_tokens"] == sum(v["estimated_tokens"] for v in est["per_model"].values())
 
@@ -337,8 +345,9 @@ def test_the_dev_set_runs_end_to_end_through_the_command(monkeypatch, paths, cap
     fake = FakeModel()
     code = run_eval.cmd_run(args(set="dev", models="model-a"), real_factory=lambda settings: fake, limiter=no_waiting())
     out = capsys.readouterr().out
-    assert code == 0 and "Estimate for the dev set" in out and "API calls made: 15" in out and "No labels yet" in out
-    assert len(run_eval.read_predictions(paths, "model-a")) == 15
+    n = len(store.load_inputs("dev"))
+    assert code == 0 and "Estimate for the dev set" in out and f"API calls made: {n}" in out and "No labels yet" in out
+    assert len(run_eval.read_predictions(paths, "model-a")) == n == 10
     assert not (paths.results / "metrics.json").exists(), "without gold labels there are no metrics to write"
 
 

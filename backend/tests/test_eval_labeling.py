@@ -1,3 +1,5 @@
+"""The lean evaluation's data: the notes, the three-field labels, and the blind labeling tool."""
+
 import ast
 import json
 from collections import Counter
@@ -10,14 +12,15 @@ from eval import label_tool, labels as store
 EVAL = Path(store.EVAL_DIR)
 TEAMS = ["product", "payments", "platform", "data"]
 COVERAGE = json.loads((EVAL / "design" / "coverage.json").read_text(encoding="utf-8"))
+ARCHIVE = EVAL / "archive" / "full_v1"
 
 
-# ---- the input sets --------------------------------------------------------
+# ---- the note sets, against the lean spec -------------------------------------
 
 
 def test_set_sizes_and_shape():
     dev, test = store.load_inputs("dev"), store.load_inputs("test")
-    assert (len(dev), len(test)) == (15, 60)
+    assert (len(dev), len(test)) == (10, 30)
     for rows in (dev, test):
         assert all(set(r) == {"id", "input"} for r in rows), "input files hold only id and text, no labels or categories"
         assert all(r["input"].strip() for r in rows)
@@ -25,42 +28,69 @@ def test_set_sizes_and_shape():
         assert len(ids) == len(set(ids))
 
 
-def test_test_set_has_50_single_and_10_multi_task_notes():
-    counts = Counter(COVERAGE["test"].values())
-    assert counts["multi"] == 10
-    assert sum(v for k, v in counts.items() if k != "multi") == 50
-    assert counts == {
-        "normal_plain": 6, "normal_deadline": 9, "email": 7, "dep_explicit": 5, "dep_implicit": 5,
-        "dep_reverse": 6, "vague": 7, "trap": 5, "multi": 10,
+def test_every_note_is_a_single_task():
+    for name in ("dev", "test"):
+        for row in store.load_inputs(name):
+            assert "\n" not in row["input"] and not row["input"].lstrip().startswith(("-", "1.", "*")), row
+
+
+def test_the_test_set_meets_the_requested_composition():
+    cats = list(COVERAGE["test"].values())
+    dependency = [c for c in cats if c.startswith("dep_")]
+    reverse = [c for c in cats if c.startswith("dep_reverse")]
+    email = [c for c in cats if c.startswith("email")]
+    with_deadline = [c for c in cats if c.endswith("+deadline")]
+    assert len(cats) == 30
+    assert len(dependency) >= 10 and len(reverse) >= 3, "at least 10 dependency notes, at least 3 of them reverse"
+    assert len(email) == 8, "about 8 email tasks"
+    assert len(with_deadline) >= 8, "at least 8 notes with a relative deadline"
+    assert Counter(c.split("+")[0] for c in cats) == {
+        "dep_need": 7, "dep_reverse": 3, "email": 8, "plain": 7, "trap": 5,
     }
 
 
-def test_dev_set_covers_every_kind_including_multi_task():
-    kinds = set(COVERAGE["dev"].values())
-    assert {"email", "dep_explicit", "dep_implicit", "dep_reverse", "vague", "trap", "multi", "normal_deadline"} <= kinds
+def test_the_dev_set_mirrors_the_mix_in_miniature():
+    cats = [c.split("+")[0] for c in COVERAGE["dev"].values()]
+    assert Counter(cats) == {"dep_need": 2, "dep_reverse": 1, "email": 2, "plain": 4, "trap": 1}
+    assert any(c.endswith("+deadline") for c in COVERAGE["dev"].values())
 
 
 def test_coverage_ids_match_the_input_files():
-    for name, key in (("dev", "dev"), ("test", "test")):
-        assert {r["id"] for r in store.load_inputs(name)} == set(COVERAGE[key])
+    for name in ("dev", "test"):
+        assert {r["id"] for r in store.load_inputs(name)} == set(COVERAGE[name])
 
 
-def test_dev_and_test_notes_do_not_overlap():
+def test_dev_and_test_notes_do_not_overlap_each_other_or_the_archived_sets():
     dev = {r["input"].lower() for r in store.load_inputs("dev")}
-    assert not dev & {r["input"].lower() for r in store.load_inputs("test")}
+    test = {r["input"].lower() for r in store.load_inputs("test")}
+    old = {
+        json.loads(line)["input"].lower()
+        for f in ("dev.jsonl", "dataset.jsonl")
+        for line in (ARCHIVE / f).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+    assert not dev & test and not (dev | test) & old
 
 
 def test_input_order_does_not_follow_category():
-    # Shuffled: the first ten test ids must not all share one category.
-    first = [COVERAGE["test"][r["id"]] for r in store.load_inputs("test")[:10]]
-    assert len(set(first)) > 3
+    first = [COVERAGE["test"][r["id"]].split("+")[0] for r in store.load_inputs("test")[:10]]
+    assert len(set(first)) > 2
 
 
-def test_generator_reproduces_the_committed_files(tmp_path):
+def test_generator_reproduces_the_committed_files():
     from eval.design import build_inputs as b
 
-    rows, coverage = b.build(b.TEST, "t", b.SEED + 1)
-    assert rows == store.load_inputs("test") and coverage == COVERAGE["test"]
+    for rows_cov, name, prefix, seed, source in (
+        (b.build(b.TEST, "t", b.SEED + 1), "test", "t", b.SEED + 1, b.TEST),
+        (b.build(b.DEV, "d", b.SEED), "dev", "d", b.SEED, b.DEV),
+    ):
+        rows, coverage = rows_cov
+        assert rows == store.load_inputs(name) and coverage == COVERAGE[name]
+
+
+def test_the_old_labels_are_archived_and_no_longer_where_the_tool_looks():
+    assert (ARCHIVE / "labels" / "dataset.labels.jsonl").exists() and (ARCHIVE / "README.md").exists()
+    assert "superseded" in (ARCHIVE / "README.md").read_text(encoding="utf-8").lower()
 
 
 # ---- deadline parsing and label validation ---------------------------------
@@ -79,30 +109,38 @@ def test_parse_deadline_rejects_bad_or_past_values(bad):
 
 
 def good(**over):
-    base = {"n_tasks": 1, "task_type": "normal", "has_dependency": False, "dependency_direction": "none",
-            "dependency_team": "none", "deadline": None, "needs_clarification": False}
-    return {**base, **over}
+    return {"task_type": "normal", "dependency": None, "deadline": None, **over}
 
 
-def test_valid_labels_pass():
-    assert store.validate_labels(good(), TEAMS) == []
-    dep = good(has_dependency=True, dependency_direction="need_from_them", dependency_team="payments")
-    assert store.validate_labels(dep, TEAMS) == []
-    assert store.validate_labels({"n_tasks": 3}, TEAMS) == []
+def dep(team="payments", direction="need_from_them"):
+    return {"team": team, "direction": direction}
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [good(), good(task_type="email"), good(dependency=dep()), good(dependency=dep("data", "they_need_from_me")),
+     good(deadline="2026-11-03T17:00:00+05:30")],
+)
+def test_valid_labels_pass(labels):
+    assert store.validate_labels(labels, TEAMS) == []
 
 
 @pytest.mark.parametrize(
     "labels",
     [
         good(task_type="call"),
-        good(has_dependency=True),  # direction and team missing
-        good(has_dependency=True, dependency_direction="need_from_them", dependency_team="marketing"),
-        good(dependency_team="payments"),  # team without a dependency
-        good(has_dependency=True, dependency_direction="need_from_them", dependency_team="unknown", needs_clarification=False),
+        good(dependency=dep("product")),  # your own team is never a dependency
+        good(dependency=dep("unknown")),  # an unidentified team is flagged, not labeled
+        good(dependency=dep("marketing")),
+        good(dependency=dep(direction="sideways")),
+        good(dependency="payments"),
+        good(dependency={"team": "payments"}),
         good(deadline="2026-11-03T17:00:00"),  # no offset
         good(deadline="2026-10-01T17:00:00+05:30"),  # before the reference time
-        {"n_tasks": 3, "task_type": "email"},  # multi-task notes record only the count
-        {"n_tasks": 0},
+        good(deadline="soon"),
+        {"task_type": "normal", "dependency": None},  # a field is missing
+        {**good(), "needs_clarification": True},  # dropped fields are rejected, not ignored
+        {**good(), "n_tasks": 1},
     ],
 )
 def test_inconsistent_labels_are_rejected(labels):
@@ -117,7 +155,7 @@ def labeling(tmp_path, monkeypatch):
     items = [
         {"id": "x001", "input": "ask the payments team for the refund api documentation"},
         {"id": "x002", "input": "update the readme"},
-        {"id": "x003", "input": "do the thing\nand the other thing"},
+        {"id": "x003", "input": "email aarav the notes"},
     ]
     path = tmp_path / "x.jsonl"
     path.write_text("".join(json.dumps(i) + "\n" for i in items), encoding="utf-8")
@@ -142,26 +180,43 @@ def session(answers, set_name="x", **kw):
     return "\n".join(out + shown)
 
 
-DEP_PAYMENTS = ["1", "n", "y", "1", "2", "", "n", "", "wants docs"]  # need_from_them, payments (menu item 2)
-PLAIN = ["1", "n", "n", "2026-11-03 17:00", "n", "", ""]
+# type, dependency y, direction 1 (need), team 1 (payments), deadline none, confirm, note
+DEP_PAYMENTS = ["n", "y", "1", "1", "", "", "wants docs"]
+# type, dependency n, a deadline, confirm, note
+PLAIN = ["n", "n", "2026-11-03 17:00", "", ""]
+EMAIL = ["e", "n", "", "", ""]
 
 
-def test_full_session_saves_timestamped_human_labels(labeling):
-    session(DEP_PAYMENTS + PLAIN + ["2", "", ""])  # third note: 2 tasks, count only
+def test_a_session_saves_timestamped_human_labels_with_exactly_three_fields(labeling):
+    session(DEP_PAYMENTS + PLAIN + EMAIL)
     history = store.read_history("x")
     assert [r["id"] for r in history] == ["x001", "x002", "x003"]
     first = history[0]
-    assert first["status"] == "labeled" and first["labeled_by"] == store.LABELED_BY
-    assert first["labeled_at"].endswith("+00:00") and first["revision"] == 1
-    assert (first["has_dependency"], first["dependency_direction"], first["dependency_team"]) == (True, "need_from_them", "payments")
-    assert first["notes"] == "wants docs"
-    assert history[1]["deadline"] == "2026-11-03T17:00:00+05:30"
-    assert history[2] == {**history[2], "n_tasks": 2} and "task_type" not in history[2]
+    assert first["status"] == "labeled" and first["labeled_by"] == store.LABELED_BY and first["revision"] == 1
+    assert first["labeled_at"].endswith("+00:00") and first["notes"] == "wants docs"
+    assert first["task_type"] == "normal" and first["dependency"] == {"team": "payments", "direction": "need_from_them"}
+    assert first["deadline"] is None
+    assert history[1]["deadline"] == "2026-11-03T17:00:00+05:30" and history[1]["dependency"] is None
+    assert history[2]["task_type"] == "email"
+    for record in history:
+        assert {k for k in record if k in ("n_tasks", "needs_clarification", "has_dependency")} == set(), "dropped fields are never stored"
     assert store.progress("x").remaining == 0
 
 
+def test_the_team_menu_never_offers_your_own_team(labeling):
+    text = session(DEP_PAYMENTS)
+    assert "[1] payments  [2] platform  [3] data" in text and "product" not in text.split("Team:")[1].split("\n")[0]
+
+
+def test_both_directions_and_every_other_team_can_be_chosen(labeling):
+    session(["n", "y", "2", "3", "", "", "", "n", "y", "1", "2", "", "", ""])  # they need from me -> data; need from them -> platform
+    a, b = store.read_history("x")
+    assert a["dependency"] == {"team": "data", "direction": "they_need_from_me"}
+    assert b["dependency"] == {"team": "platform", "direction": "need_from_them"}
+
+
 def test_session_resumes_and_skips_what_is_done(labeling):
-    session(DEP_PAYMENTS)  # label one, then input runs out
+    session(DEP_PAYMENTS)  # label one, then the input runs out
     text = session(PLAIN)
     assert "update the readme" in text and "refund api documentation" not in text
     assert store.progress("x").labeled == 2
@@ -185,68 +240,72 @@ def test_flagging_records_the_reason_and_no_label(labeling):
     assert store.progress("x").flagged == 1
 
 
-def test_inconsistent_answers_make_the_person_redo_the_note(labeling):
-    # unknown team but "no clarification needed" breaks rule C3: nothing is saved until fixed
-    bad = ["1", "n", "y", "1", "5", "", "n"]
-    fixed = ["1", "n", "y", "1", "5", "", "y", "", ""]
-    text = session(bad + fixed)
-    assert "do not fit together" in text
-    record = store.read_history("x")[0]
-    assert record["dependency_team"] == "unknown" and record["needs_clarification"] is True
-
-
-def test_redo_before_saving_and_bad_deadline_are_reprompted(labeling):
-    text = session(["1", "n", "n", "tomorrow", "2026-11-03 17:00", "n", "r"] + PLAIN)
+def test_redo_before_saving_and_a_bad_deadline_are_reprompted(labeling):
+    text = session(["n", "n", "tomorrow", "2026-11-03 17:00", "r"] + PLAIN)
     assert "use YYYY-MM-DD HH:MM" in text
     assert len(store.read_history("x")) == 1
 
 
 def test_relabel_appends_a_new_revision_and_latest_wins(labeling):
     session(PLAIN)
-    session(["1", "e", "n", "", "n", "", "corrected"], relabel="x001")
+    session(["e", "n", "", "", "corrected"], relabel="x001")
     history = [r for r in store.read_history("x") if r["id"] == "x001"]
     assert [r["revision"] for r in history] == [1, 2]
     latest = store.latest_by_id(store.read_history("x"))["x001"]
-    assert latest["task_type"] == "email" and latest["notes"] == "corrected"
+    assert latest["task_type"] == "email" and latest["deadline"] is None and latest["notes"] == "corrected"
 
 
-def test_review_shows_each_note_with_its_current_label_and_marks_the_unlabeled(labeling):
+def test_relabeling_an_unknown_id_says_so(labeling):
+    assert "No note with id nope" in session([], relabel="nope")
+
+
+def test_the_help_key_prints_the_rules(labeling):
+    text = session(["?", "q"])
+    assert "SHORT RULES" in text and "Every note is ONE task" in text and "needs clarification" not in text.lower()
+
+
+# ---- reviewing your own labels ---------------------------------------------
+
+
+def test_review_shows_each_note_with_its_current_label_and_marks_the_rest(labeling):
     session(PLAIN + ["f", "unclear"])  # x001 labeled, x002 flagged, x003 untouched
     lines = []
     label_tool.show_review("x", lines.append)
     text = "\n".join(lines)
     assert "x001  | ask the payments team for the refund api documentation" in text
-    assert "1 task | type: normal | dependency: no | deadline: 2026-11-03T17:00:00+05:30 | needs clarification: no" in text
-    assert "FLAGGED (unclear)" in text and "NOT LABELED" in text
-    assert "--relabel <id>" in text
+    assert "type: normal | dependency: no | deadline: 2026-11-03T17:00:00+05:30" in text
+    assert "FLAGGED (unclear)" in text and "NOT LABELED" in text and "--relabel <id>" in text
 
 
-def test_review_follows_a_relabel_and_shows_the_latest_answer(labeling):
+def test_review_follows_a_relabel(labeling):
     session(PLAIN)
-    session(["1", "e", "n", "", "y", "", ""], relabel="x001")
+    session(DEP_PAYMENTS, relabel="x001")
     lines = []
     label_tool.show_review("x", lines.append)
-    assert "type: email" in "\n".join(lines) and "deadline: none | needs clarification: yes" in "\n".join(lines)
+    assert "dependency: yes (need_from_them, payments) | deadline: none" in "\n".join(lines)
 
 
 def test_summary_counts_the_answers_so_a_pattern_is_visible(labeling):
-    session(PLAIN + ["1", "e", "y", "2", "2", "", "y", "", ""] + ["2", "", ""])
+    session(PLAIN + EMAIL)
     lines = []
     label_tool.show_summary("x", lines.append)
     text = "\n".join(lines)
-    assert "3 labeled notes (2 single-task, 1 multi-task)" in text
-    assert "task type: email x1, normal x1" in text and "has a dependency: no x1, yes x1" in text
-    assert "dependency team: none x1, payments x1" in text and "needs clarification: no x1, yes x1" in text
-    assert "deadline: 1 with a deadline, 1 with none" in text
+    assert "2 labeled notes" in text and "task type: email x1, normal x1" in text
+    assert "notes with a dependency: 0, without: 2" in text and "deadline: 1 with a deadline, 1 with none" in text
+
+
+def test_summary_with_a_dependency(labeling):
+    session(DEP_PAYMENTS + PLAIN)
+    lines = []
+    label_tool.show_summary("x", lines.append)
+    text = "\n".join(lines)
+    assert "dependency direction: need_from_them x1" in text and "dependency team: payments x1" in text
+    assert "notes with a dependency: 1, without: 1" in text
 
 
 def test_review_and_summary_run_on_the_command_line(labeling, capsys):
     assert label_tool.main(["x", "--review"]) == 0 and "NOT LABELED" in capsys.readouterr().out
     assert label_tool.main(["x", "--summary"]) == 0 and "0 labeled notes" in capsys.readouterr().out
-
-
-def test_help_key_prints_the_rules(labeling):
-    assert "SHORT RULES" in session(["?", "q"])
 
 
 # ---- blindness --------------------------------------------------------------
@@ -265,10 +324,8 @@ def test_tool_never_imports_the_app_or_any_model_code():
 
 
 def test_a_real_session_never_shows_categories_or_design_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(store, "LABEL_DIR", tmp_path / "labels")  # a fresh, empty label folder, whatever is labeled for real
-    categories = set(COVERAGE["test"].values())
+    monkeypatch.setattr(store, "LABEL_DIR", tmp_path / "labels")  # an empty label folder, whatever is labeled for real
+    categories = {c.split("+")[0] for c in COVERAGE["test"].values()}
     text = session(["q"], set_name="test")
-    shown_words = set(text.replace("_", " _ ").split())
     assert not any(c in text for c in categories if "_" in c), "category names must never be shown"
-    assert "coverage" not in text and "design" not in text.lower().replace("designed", "")
-    assert "Note 1 of 60" in text and shown_words
+    assert "coverage" not in text and "Note 1 of 30" in text
