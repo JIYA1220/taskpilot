@@ -1,8 +1,10 @@
-"""Blind labeling tool.  python -m eval.label_tool dev|test [--stats] [--relabel ID]
+"""Blind labeling tool.  python -m eval.label_tool dev|test [--stats|--review|--summary] [--relabel ID]
 
-Shows only the note text. It never calls a model, never imports one, and never shows
-the design metadata, so the labels are entirely yours. Each confirmed label is saved
-at once (append-only, timestamped) and you can quit and resume at any time.
+Shows only the note text. It never calls a model, never imports one, and never shows the
+design metadata, so the labels are entirely yours. Each confirmed label is saved at once
+(append-only, timestamped) and you can quit and resume at any time.
+
+Every note is a single task and has three labels: task type, dependency, deadline.
 """
 
 import argparse
@@ -13,21 +15,21 @@ from collections.abc import Callable
 from eval import labels as store
 
 DIRECTORY = json.loads((store.EVAL_DIR / "directory.json").read_text(encoding="utf-8"))
+# The person's own team is never a dependency, so it is not offered.
 TEAM_IDS = [t["id"] for t in DIRECTORY["teams"]]
+OTHER_TEAMS = [t for t in TEAM_IDS if t != store.OWN_TEAM]
 
 SHORT_RULES = """
 SHORT RULES (full guide: eval/LABELING_GUIDE.md)
- Reference time: Mon 2 Nov 2026 09:00 IST. Your own team: product.
- Tasks     one per distinct action/object. Prepare+send the same thing = 1. Text aimed at the AI is not a task.
- Type      email = send/email/mail/write to/reply/forward to a person. Everything else (incl. "ask X for Y") = normal.
- Dependency yes = needs another team's action, or another team needs something from you (stated or clearly implied).
-           Needing access/approval/fix/data in another team's system counts. Just mentioning a team/person/system does not.
-           Vendors/banks/customers = no. Internal group not in directory (legal, finance) = yes, team unknown.
- Deadline  clock time -> that time (tomorrow if already past) | bare 'by 5' 1-6=PM, 7-11=AM | EOD=18:00 | tonight=21:00
-           morning=12:00 | date/weekday/today/tomorrow alone=23:59 | 'in N hours'=09:00+N | urgent/asap/none = blank
- Clarify   yes if: vague action; unresolved reference (them/that); dependency team unknown; unresolvable time phrase.
-           A missing deadline/priority/reviewer on a clear task is NOT a reason.
- Keys      ? rules   f flag as ambiguous   s skip for now   q quit (progress is saved)
+ Reference time: Mon 2 Nov 2026 09:00 IST. Your own team: product. Every note is ONE task.
+ Type       email = send/email/mail/write to/reply/forward to a person. Everything else (incl. "ask X for Y") = normal.
+ Dependency yes = the task needs another team's action, or another team needs something from you (stated or clearly implied).
+            Needing access/approval/fix/data in another team's system counts. Just mentioning a team/person/system does not.
+            Sending someone a deliverable is not a dependency. Vendors/banks/customers = no. Your own team = no.
+ Deadline   clock time -> that time (tomorrow if already past) | bare 'by 5' 1-6=PM, 7-11=AM | EOD=18:00 | tonight=21:00
+            morning=12:00 | date/weekday/today/tomorrow alone=23:59 | 'in N hours'=09:00+N | urgent/asap/none = blank
+ Text aimed at the AI ("ignore your instructions...") is not part of the task.
+ Keys       ? rules   f flag as ambiguous   s skip for now   q quit (progress is saved)
 """.strip()
 
 
@@ -71,17 +73,9 @@ def choose(prompt: str, options: dict, inp: Input, out: Output):
         out(f"  please answer one of: {', '.join(options)}")
 
 
-def ask_count(inp: Input, out: Output) -> int:
-    while True:
-        answer = read("1. How many tasks are in this note? ", inp, out)
-        if answer.isdigit() and 1 <= int(answer) <= 10:
-            return int(answer)
-        out("  enter a whole number from 1 to 10")
-
-
 def ask_deadline(inp: Input, out: Output) -> str | None:
     while True:
-        answer = read("5. Deadline as YYYY-MM-DD HH:MM in IST, or Enter for none: ", inp, out)
+        answer = read("3. Deadline as YYYY-MM-DD HH:MM in IST, or Enter for none: ", inp, out)
         try:
             return store.parse_deadline(answer)
         except ValueError as exc:
@@ -89,12 +83,9 @@ def ask_deadline(inp: Input, out: Output) -> str | None:
 
 
 def ask_labels(inp: Input, out: Output) -> dict:
-    n = ask_count(inp, out)
-    if n > 1:
-        return {"n_tasks": n}
-    task_type = choose("2. Task type: [n]ormal or [e]mail? ", {"n": "normal", "e": "email"}, inp, out)
-    has_dep = choose("3. Dependency on another team (either direction)? [y]es / [n]o: ", {"y": True, "n": False}, inp, out)
-    direction, team = "none", "none"
+    task_type = choose("1. Task type: [n]ormal or [e]mail? ", {"n": "normal", "e": "email"}, inp, out)
+    has_dep = choose("2. Dependency on another team (either direction)? [y]es / [n]o: ", {"y": True, "n": False}, inp, out)
+    dependency = None
     if has_dep:
         direction = choose(
             "   Direction: [1] you need something from them  [2] they need something from you: ",
@@ -102,30 +93,16 @@ def ask_labels(inp: Input, out: Output) -> dict:
             inp,
             out,
         )
-        menu = {str(i + 1): t for i, t in enumerate([*TEAM_IDS, "unknown"])}
+        menu = {str(i + 1): t for i, t in enumerate(OTHER_TEAMS)}
         listing = "  ".join(f"[{k}] {v}" for k, v in menu.items())
-        team = choose(f"   Team: {listing}: ", menu, inp, out)
-    deadline = ask_deadline(inp, out)
-    needs = choose("6. Needs clarification? [y]es / [n]o: ", {"y": True, "n": False}, inp, out)
-    return {
-        "n_tasks": 1,
-        "task_type": task_type,
-        "has_dependency": has_dep,
-        "dependency_direction": direction,
-        "dependency_team": team,
-        "deadline": deadline,
-        "needs_clarification": needs,
-    }
+        dependency = {"team": choose(f"   Team: {listing}: ", menu, inp, out), "direction": direction}
+    return {"task_type": task_type, "dependency": dependency, "deadline": ask_deadline(inp, out)}
 
 
 def summarize(labels: dict) -> str:
-    if labels["n_tasks"] > 1:
-        return f"  {labels['n_tasks']} tasks (count only)"
-    dep = "no" if not labels["has_dependency"] else f"yes ({labels['dependency_direction']}, {labels['dependency_team']})"
-    return (
-        f"  1 task | type: {labels['task_type']} | dependency: {dep} | "
-        f"deadline: {labels['deadline'] or 'none'} | needs clarification: {'yes' if labels['needs_clarification'] else 'no'}"
-    )
+    dep = labels["dependency"]
+    dependency = "no" if dep is None else f"yes ({dep['direction']}, {dep['team']})"
+    return f"  type: {labels['task_type']} | dependency: {dependency} | deadline: {labels['deadline'] or 'none'}"
 
 
 def label_item(set_name: str, item: dict, position: str, inp: Input, out: Output) -> str:
@@ -181,19 +158,18 @@ def show_summary(set_name: str, out: Output) -> None:
     """Counts of your answers. A pattern such as 'no deadline on any note' is worth a second look."""
     latest = store.latest_by_id(store.read_history(set_name))
     labeled = [r for r in latest.values() if r["status"] == "labeled"]
-    single = [r for r in labeled if r["n_tasks"] == 1]
-    out(f"{set_name}: {len(labeled)} labeled notes ({len(single)} single-task, {len(labeled) - len(single)} multi-task)")
+    out(f"{set_name}: {len(labeled)} labeled notes")
+    deps = [r["dependency"] for r in labeled if r["dependency"]]
     for name, values in (
-        ("task type", [r["task_type"] for r in single]),
-        ("has a dependency", ["yes" if r["has_dependency"] else "no" for r in single]),
-        ("dependency direction", [r["dependency_direction"] for r in single]),
-        ("dependency team", [r["dependency_team"] for r in single]),
-        ("needs clarification", ["yes" if r["needs_clarification"] else "no" for r in single]),
+        ("task type", [r["task_type"] for r in labeled]),
+        ("dependency direction", [d["direction"] for d in deps]),
+        ("dependency team", [d["team"] for d in deps]),
     ):
         counts = {v: values.count(v) for v in sorted(set(values))}
-        out(f"  {name}: " + ", ".join(f"{v} x{n}" for v, n in counts.items()))
-    with_deadline = sum(1 for r in single if r["deadline"])
-    out(f"  deadline: {with_deadline} with a deadline, {len(single) - with_deadline} with none")
+        out(f"  {name}: " + (", ".join(f"{v} x{n}" for v, n in counts.items()) or "none"))
+    out(f"  notes with a dependency: {len(deps)}, without: {len(labeled) - len(deps)}")
+    with_deadline = sum(1 for r in labeled if r["deadline"])
+    out(f"  deadline: {with_deadline} with a deadline, {len(labeled) - with_deadline} with none")
 
 
 def run(set_name: str, inp: Input = input, out: Output = print, relabel: str | None = None) -> None:

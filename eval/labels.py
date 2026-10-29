@@ -1,7 +1,12 @@
-"""Gold-label storage and validation for the evaluation sets.
+"""Gold-label storage and validation for the evaluation sets (the lean design).
 
-Labels live in append-only JSONL files under eval/labels/. A record is only ever
-written by eval/label_tool.py from a person's answers; nothing here calls a model.
+Every note is a single task, and a label has exactly three fields:
+    task_type   "normal" or "email"
+    dependency  null, or {"team": <directory team id>, "direction": "need_from_them" | "they_need_from_me"}
+    deadline    null, or an ISO 8601 time with offset, after the fixed reference time
+
+Labels live in append-only JSONL files under eval/labels/. A record is only ever written by
+eval/label_tool.py from a person's answers; nothing here calls a model.
 """
 
 import json
@@ -19,7 +24,9 @@ FIXED_NOW = datetime(2026, 11, 2, 9, 0, tzinfo=TZ)
 
 TASK_TYPES = ("normal", "email")
 DIRECTIONS = ("need_from_them", "they_need_from_me")
+OWN_TEAM = "product"  # the person labeling is on this team; a dependency is always on another team
 LABELED_BY = "human via eval/label_tool.py"
+LABEL_FIELDS = ("task_type", "dependency", "deadline")
 
 SETS = {"dev": "dev.jsonl", "test": "dataset.jsonl"}
 
@@ -85,31 +92,29 @@ def parse_deadline(text: str) -> str | None:
 def validate_labels(labels: dict, team_ids: list[str]) -> list[str]:
     """Return a list of problems (empty means the labels are consistent)."""
     problems = []
-    n = labels.get("n_tasks")
-    if not isinstance(n, int) or not 1 <= n <= 10:
-        return ["n_tasks must be a whole number from 1 to 10"]
-    if n > 1:
-        extra = set(labels) - {"n_tasks"}
-        return [f"multi-task notes record only n_tasks (found {sorted(extra)})"] if extra else []
-    if labels.get("task_type") not in TASK_TYPES:
+    extra = set(labels) - set(LABEL_FIELDS)
+    if extra:
+        problems.append(f"unexpected field(s) {sorted(extra)}: a label has exactly {list(LABEL_FIELDS)}")
+    missing = set(LABEL_FIELDS) - set(labels)
+    if missing:
+        return problems + [f"missing field(s) {sorted(missing)}"]
+
+    if labels["task_type"] not in TASK_TYPES:
         problems.append(f"task_type must be one of {TASK_TYPES}")
-    if not isinstance(labels.get("needs_clarification"), bool):
-        problems.append("needs_clarification must be yes or no")
-    has_dep = labels.get("has_dependency")
-    direction, team = labels.get("dependency_direction"), labels.get("dependency_team")
-    if has_dep is True:
-        if direction not in DIRECTIONS:
-            problems.append(f"dependency_direction must be one of {DIRECTIONS}")
-        if team not in [*team_ids, "unknown"]:
-            problems.append("dependency_team must be a directory team id or 'unknown'")
-        if team == "unknown" and labels.get("needs_clarification") is False:
-            problems.append("an 'unknown' dependency team means needs_clarification must be yes (rule C3)")
-    elif has_dep is False:
-        if direction != "none" or team != "none":
-            problems.append("with no dependency, direction and team must be 'none'")
-    else:
-        problems.append("has_dependency must be yes or no")
-    deadline = labels.get("deadline")
+
+    dependency = labels["dependency"]
+    if dependency is not None:
+        if not isinstance(dependency, dict) or set(dependency) != {"team", "direction"}:
+            problems.append("dependency must be null or {team, direction}")
+        else:
+            if dependency["direction"] not in DIRECTIONS:
+                problems.append(f"dependency direction must be one of {DIRECTIONS}")
+            if dependency["team"] == OWN_TEAM:
+                problems.append("a dependency is on another team, never your own (rule D2)")
+            elif dependency["team"] not in team_ids:
+                problems.append("dependency team must be a directory team id")
+
+    deadline = labels["deadline"]
     if deadline is not None:
         try:
             value = datetime.fromisoformat(deadline)
