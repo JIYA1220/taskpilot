@@ -43,20 +43,12 @@ ROWS: list[tuple[str, Callable[[dict], str]]] = [
     ("Keyword + model (the product's matcher)", lambda x: pct(x["team_routing"]["keyword_plus_model"])),
     ("Keywords were decisive on their own", lambda x: pct(x["team_routing"]["keyword_decisive_rate"])),
     ("Model had to be asked", lambda x: pct(x["team_routing"]["model_called_rate"])),
-    ("**Needs clarification** (predicted = asked at least one question)", lambda x: ""),
-    ("Accuracy", lambda x: pct(x["needs_clarification"]["accuracy"])),
-    ("Precision", lambda x: pct(x["needs_clarification"]["precision"])),
-    ("Recall", lambda x: pct(x["needs_clarification"]["recall"])),
-    ("**Task splitting**", lambda x: ""),
-    ("Task count exact, multi-task notes", lambda x: pct(x["task_count"]["multi_exact_match"])),
-    ("Exactly one task, single-task notes", lambda x: pct(x["task_count"]["single_exact_match"])),
     ("**Cost**", lambda x: ""),
     ("Latency of the extract call, median (ms)", lambda x: num(x["latency_ms"]["extract_median"])),
     ("Latency of the extract call, p95 (ms)", lambda x: num(x["latency_ms"]["extract_p95"])),
     ("Latency of the matcher call when the model was asked, median (ms)", lambda x: num(x["latency_ms"]["matcher_median_when_model_called"])),
-    ("Mean tokens per note (input + output)", lambda x: num(x["tokens"]["mean_total_per_item"], digits=0)),
-    ("Mean tokens per predicted task", lambda x: num(x["tokens"]["mean_total_per_predicted_task"], digits=0)),
-    ("Mean reasoning tokens per note (part of the output)", lambda x: num(x["tokens"]["mean_reasoning_per_item"], digits=0)),
+    ("Mean tokens per note (input + output)", lambda x: num(x["tokens"]["mean_total_per_note"], digits=0)),
+    ("Mean reasoning tokens per note (part of the output)", lambda x: num(x["tokens"]["mean_reasoning_per_note"], digits=0)),
 ]
 
 
@@ -70,8 +62,9 @@ def render_summary(doc: dict) -> str:
     lines += [
         "## What was measured",
         "",
-        f"- **Notes:** {prov['n_scored']} scored ({prov['n_single']} single-task, {prov['n_multi']} multi-task) from `{prov['input_file']}`.",
-        "- **Gold labels:** written by hand by Jiya with `eval/label_tool.py`, blind to any model output, following `eval/LABELING_GUIDE.md` (version 1). No label came from an AI.",
+        f"- **Notes:** {prov['n_scored']} scored, all single-task, from `{prov['input_file']}` ({prov['n_with_dependency']} of them have a dependency on another team).",
+        "- **Gold labels:** three per note (task type, dependency, deadline), written by hand by Jiya with `eval/label_tool.py`, blind to any model output, following `eval/LABELING_GUIDE.md` (version 2). No label came from an AI.",
+        "- **Not evaluated:** the clarifying questions the app asks, and splitting a note into several tasks. Both exist in the product; neither is measured here.",
         "- **Notes:** written by an AI assistant (not by the evaluated models) after the prompts were fixed.",
         f"- **Models:** {', '.join(f'`{x}`' for x in models)}, each doing every step (extraction and the team matcher), temperature 0, reasoning effort `{prov['reasoning_effort']}`.",
         f"- **Fixed reference time:** {prov['fixed_now']} (all relative dates are resolved against it).",
@@ -94,18 +87,21 @@ def render_summary(doc: dict) -> str:
     for label, cell in ROWS:
         lines.append(f"| {label} | " + " | ".join(cell(doc['models'][x]) for x in models) + " |")
     first = doc["models"][models[0]]
+    n, routed = first["counts"]["items_scored"], first["team_routing"]["n_items_with_a_gold_team"]
     lines += [
         "",
         "## How to read this",
         "",
-        f"- Per-task metrics use the {first['counts']['single_task_items']} single-task notes; routing uses the {first['team_routing']['n_items_with_a_gold_team']} of them whose gold dependency names a directory team. The {first['counts']['multi_task_items']} multi-task notes are used only for the task-count match.",
-        "- For a single-task note the model's first predicted task is compared with the gold label; a different number of tasks is counted separately as a task-count error.",
-        "- With samples this small the intervals are wide. Overlapping intervals between the two models are not evidence that they are equal, and non-overlapping ones are not a formal significance test.",
+        f"- **n = {n} notes gives wide intervals.** A rate of 80% on 30 notes is compatible with a true rate anywhere from the high 60s to the low 90s. Differences of a few notes between the models are within noise.",
+        f"- **Routing rests on only {routed} notes** (those whose gold names a team), so its intervals are wider still; read the three routing rows as a rough comparison, not a ranking.",
+        "- If the model returns several tasks for a note, its first task is the one compared with the gold label. Splitting is not evaluated.",
+        "- Overlapping intervals between the two models are not evidence that they are equal, and non-overlapping ones are not a formal significance test.",
         "- Keyword-only routing answers with the highest-scoring team; a tie or no evidence counts as wrong.",
         "- Latency is the recorded time of the original API call (cached reruns reuse it). Output tokens include the models' hidden reasoning tokens.",
         "",
         "## Limitations",
         "",
+        "- The evaluation is deliberately lean: clarifying questions and task splitting are not evaluated, and only three properties of each note are scored.",
         "- One person labeled every note, so label noise is not measured; the demo organization, tasks and directory are synthetic.",
         "- The two models are two sizes of one open-weight family, and the result is for one prompt version at one time.",
         "- The test notes were written by the same assistant that wrote the prompts. The prompts were not tuned on the test notes, but the wording of the notes may still resemble the prompts.",

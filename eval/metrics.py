@@ -3,26 +3,24 @@
 Pure functions. Nothing here calls a model or reads a file, so the maths can be tested on
 small synthetic examples whose answers are known by hand.
 
-Scoring scope (stated in the README): per-task metrics use only the notes labeled as a single
-task. For those, the model's FIRST predicted task is compared with the gold label; if the model
-produced a different number of tasks that is counted separately as a task-count error. The
-multi-task notes are used only for the task-count match.
+The lean evaluation scores three things per note, because the notes are all single-task and
+a gold label has exactly three fields: task type, dependency (none, or a team plus a
+direction) and deadline. NOT evaluated: clarifying questions, and splitting a note into
+several tasks. If the model returns more than one task for a note, its FIRST task is the one
+compared with the gold label.
 
 Definitions:
-  * predicted dependency  = the task's dependency.direction is not "none"
-  * predicted clarification = the task has at least one clarifying question ("unknowns")
-  * deadline match = same instant, or both absent
-  * routing is scored on single-task notes whose gold dependency names a directory team, for
-    three methods: keyword-only (the highest-scoring team; a tie or no evidence is wrong),
-    the extract step's own pick, and keyword evidence plus the model (the production matcher).
+  * predicted dependency = the task's dependency.direction is not "none"
+  * deadline match       = same instant, or both absent
+  * routing is scored on notes whose gold has a dependency, for three methods: keyword-only
+    (the highest-scoring team; a tie or no evidence is wrong), the extract step's own pick,
+    and keyword evidence plus the model (the matcher the app actually uses).
 """
 
 from collections.abc import Sequence
 from datetime import datetime
 
 from eval import stats
-
-ABSTAIN = (None, "none", "unknown")
 
 
 def _instant(value: str | None) -> datetime | None:
@@ -53,30 +51,31 @@ def _tokens(prediction: dict) -> int:
 
 def score(gold: dict[str, dict], predictions: dict[str, dict], team_ids: Sequence[str]) -> dict:
     ids = [i for i in gold if i in predictions]
-    single = [i for i in ids if gold[i]["n_tasks"] == 1]
-    multi = [i for i in ids if gold[i]["n_tasks"] > 1]
     result: dict = {
         "counts": {
             "items_scored": len(ids),
-            "single_task_items": len(single),
-            "multi_task_items": len(multi),
+            "items_with_a_gold_dependency": sum(gold[i]["dependency"] is not None for i in ids),
             "gold_items_without_prediction": sorted(set(gold) - set(predictions)),
         }
     }
 
     result["json_valid_first_try"] = stats.rate(sum(predictions[i]["extract"]["first_try_ok"] for i in ids), len(ids))
     result["json_valid_after_retry"] = stats.rate(sum(predictions[i]["extract"]["ok"] for i in ids), len(ids))
-    result["task_type_accuracy"] = stats.rate(sum(first_task(predictions[i])["task_type"] == gold[i]["task_type"] for i in single), len(single))
+    result["task_type_accuracy"] = stats.rate(sum(first_task(predictions[i])["task_type"] == gold[i]["task_type"] for i in ids), len(ids))
+    result["deadline_exact_match"] = stats.rate(
+        sum(_instant(first_task(predictions[i])["deadline"]) == _instant(gold[i]["deadline"]) for i in ids), len(ids)
+    )
 
-    # dependency detection: tp/fp/fn per item, so the F1 interval can resample items
+    # dependency detection: tp/fp/fn per note, so the F1 interval can resample notes
     per_item, direction_ok, tp = [], 0, 0
-    for i in single:
-        predicted = first_task(predictions[i])["dependency"]["direction"] != "none"
-        actual = gold[i]["has_dependency"]
+    for i in ids:
+        predicted_dependency = first_task(predictions[i])["dependency"]
+        predicted = predicted_dependency["direction"] != "none"
+        actual = gold[i]["dependency"] is not None
         per_item.append((int(predicted and actual), int(predicted and not actual), int(actual and not predicted)))
         if predicted and actual:
             tp += 1
-            direction_ok += first_task(predictions[i])["dependency"]["direction"] == gold[i]["dependency_direction"]
+            direction_ok += predicted_dependency["direction"] == gold[i]["dependency"]["direction"]
     tp_all, fp_all, fn_all = (sum(x[k] for x in per_item) for k in range(3))
     result["dependency"] = {
         "precision": stats.rate(tp_all, tp_all + fp_all),
@@ -84,24 +83,7 @@ def score(gold: dict[str, dict], predictions: dict[str, dict], team_ids: Sequenc
         "f1": stats.f1(per_item),
         "direction_accuracy_on_true_positives": stats.rate(direction_ok, tp),
     }
-
-    result["team_routing"] = _routing(gold, predictions, single, team_ids)
-    result["deadline_exact_match"] = stats.rate(
-        sum(_instant(first_task(predictions[i])["deadline"]) == _instant(gold[i]["deadline"]) for i in single), len(single)
-    )
-
-    clar = [(len(first_task(predictions[i])["unknowns"]) > 0, gold[i]["needs_clarification"]) for i in single]
-    ctp, cfp, cfn = (sum(p and g for p, g in clar), sum(p and not g for p, g in clar), sum(g and not p for p, g in clar))
-    result["needs_clarification"] = {
-        "accuracy": stats.rate(sum(p == g for p, g in clar), len(clar)),
-        "precision": stats.rate(ctp, ctp + cfp),
-        "recall": stats.rate(ctp, ctp + cfn),
-        "definition": "predicted = the model asked at least one clarifying question",
-    }
-    result["task_count"] = {
-        "multi_exact_match": stats.rate(sum(len(predictions[i]["extract"]["tasks"]) == gold[i]["n_tasks"] for i in multi), len(multi)),
-        "single_exact_match": stats.rate(sum(len(predictions[i]["extract"]["tasks"]) == 1 for i in single), len(single)),
-    }
+    result["team_routing"] = _routing(gold, predictions, ids, team_ids)
 
     latencies = [predictions[i]["extract"]["latency_ms"] for i in ids]
     matcher = [
@@ -115,40 +97,32 @@ def score(gold: dict[str, dict], predictions: dict[str, dict], team_ids: Sequenc
         "matcher_median_when_model_called": stats.summary_stat(matcher, stats.median, "median"),
         "note": "latency is from the original API call; cached reruns reuse the recorded value",
     }
-    totals = [_tokens(predictions[i]) for i in ids]
-    per_task = [_tokens(predictions[i]) / max(1, len(predictions[i]["extract"]["tasks"])) for i in ids]
     result["tokens"] = {
-        "mean_total_per_item": stats.summary_stat(totals, stats.mean, "mean"),
-        "mean_total_per_predicted_task": stats.summary_stat(per_task, stats.mean, "mean"),
-        "mean_input_per_item": stats.summary_stat([predictions[i]["extract"]["tokens_in"] for i in ids], stats.mean, "mean"),
-        "mean_output_per_item": stats.summary_stat([predictions[i]["extract"]["tokens_out"] for i in ids], stats.mean, "mean"),
-        "mean_reasoning_per_item": stats.summary_stat([predictions[i]["extract"]["reasoning_tokens"] for i in ids], stats.mean, "mean"),
+        "mean_total_per_note": stats.summary_stat([_tokens(predictions[i]) for i in ids], stats.mean, "mean"),
+        "mean_input_per_note": stats.summary_stat([predictions[i]["extract"]["tokens_in"] for i in ids], stats.mean, "mean"),
+        "mean_output_per_note": stats.summary_stat([predictions[i]["extract"]["tokens_out"] for i in ids], stats.mean, "mean"),
+        "mean_reasoning_per_note": stats.summary_stat([predictions[i]["extract"]["reasoning_tokens"] for i in ids], stats.mean, "mean"),
         "note": "output tokens include reasoning tokens; the extract call only (the matcher is counted separately)",
     }
     return result
 
 
-def _routing(gold: dict, predictions: dict, single: list[str], team_ids: Sequence[str]) -> dict:
+def _routing(gold: dict, predictions: dict, ids: list[str], team_ids: Sequence[str]) -> dict:
     methods = ("keyword_only", "step_a_pick", "keyword_plus_model")
-    wanted = [i for i in single if gold[i]["has_dependency"] and gold[i]["dependency_team"] in team_ids]
+    wanted = [i for i in ids if gold[i]["dependency"] is not None and gold[i]["dependency"]["team"] in team_ids]
     with_routing = [i for i in wanted if predictions[i].get("routing")]
     out: dict = {
         "n_items_with_a_gold_team": len(wanted),
         "n_missing_routing_record": len(wanted) - len(with_routing),
     }
     for method in methods:
-        out[method] = stats.rate(sum(predicted_team(predictions[i], method) == gold[i]["dependency_team"] for i in with_routing), len(with_routing))
+        out[method] = stats.rate(sum(predicted_team(predictions[i], method) == gold[i]["dependency"]["team"] for i in with_routing), len(with_routing))
     decisive = [i for i in with_routing if predictions[i]["routing"]["keyword_decisive"]]
     out["keyword_decisive_rate"] = stats.rate(len(decisive), len(with_routing))
-    out["keyword_accuracy_when_decisive"] = stats.rate(sum(predictions[i]["routing"]["keyword_decisive"] == gold[i]["dependency_team"] for i in decisive), len(decisive))
+    out["keyword_accuracy_when_decisive"] = stats.rate(
+        sum(predictions[i]["routing"]["keyword_decisive"] == gold[i]["dependency"]["team"] for i in decisive), len(decisive)
+    )
     out["model_called_rate"] = stats.rate(sum(predictions[i]["routing"]["keyword_llm"]["llm_called"] for i in with_routing), len(with_routing))
-
-    unknown = [i for i in single if gold[i]["has_dependency"] and gold[i]["dependency_team"] == "unknown" and predictions[i].get("routing")]
-    out["gold_unknown_team"] = {
-        "n": len(unknown),
-        **{m: stats.rate(sum(predicted_team(predictions[i], m) in ABSTAIN for i in unknown), len(unknown)) for m in methods},
-        "meaning": "correct = the method did not name a team",
-    }
     return out
 
 
@@ -166,41 +140,32 @@ def _deadline_error(expected: str | None, got: str | None) -> str | None:
 
 
 def error_items(gold: dict[str, dict], predictions: dict[str, dict], notes: dict[str, str], team_ids: Sequence[str]) -> list[dict]:
-    """Every item the model got wrong, with a one-line factual category per wrong field."""
+    """Every note the model got wrong, with a one-line factual category per wrong field."""
     errors = []
     for i in gold:
         if i not in predictions:
             continue
         g, p = gold[i], predictions[i]
+        t = first_task(p)
         found: list[str] = []
-        n_pred = len(p["extract"]["tasks"])
         if not p["extract"]["ok"]:
             found.append("invalid JSON after retry (fell back to manual review)")
-        if g["n_tasks"] > 1:
-            if n_pred != g["n_tasks"]:
-                found.append(f"wrong task count (gold {g['n_tasks']}, predicted {n_pred})")
-        else:
-            t = first_task(p)
-            if n_pred != 1:
-                found.append(f"wrong task count (gold 1, predicted {n_pred})")
-            if t["task_type"] != g["task_type"]:
-                found.append(f"wrong task type (gold {g['task_type']}, predicted {t['task_type']})")
-            predicted_dep = t["dependency"]["direction"] != "none"
-            if g["has_dependency"] and not predicted_dep:
-                found.append("missed dependency")
-            elif predicted_dep and not g["has_dependency"]:
-                found.append("false dependency")
-            elif predicted_dep and t["dependency"]["direction"] != g["dependency_direction"]:
-                found.append(f"wrong dependency direction (gold {g['dependency_direction']}, predicted {t['dependency']['direction']})")
-            if g["has_dependency"] and g["dependency_team"] in team_ids and p.get("routing"):
-                got = p["routing"]["keyword_llm"]
-                if got["team"] != g["dependency_team"]:
-                    found.append(f"wrong team (gold {g['dependency_team']}, predicted {got['team']}, decided by {got['method']})")
-            deadline = _deadline_error(g["deadline"], t["deadline"])
-            if deadline:
-                found.append(deadline)
-            if (len(t["unknowns"]) > 0) != g["needs_clarification"]:
-                found.append(f"needs-clarification: gold {'yes' if g['needs_clarification'] else 'no'}, model asked {len(t['unknowns'])} question(s)")
+        if t["task_type"] != g["task_type"]:
+            found.append(f"wrong task type (gold {g['task_type']}, predicted {t['task_type']})")
+        predicted_dependency = t["dependency"]["direction"] != "none"
+        if g["dependency"] and not predicted_dependency:
+            found.append("missed dependency")
+        elif predicted_dependency and not g["dependency"]:
+            found.append("false dependency")
+        elif g["dependency"] and t["dependency"]["direction"] != g["dependency"]["direction"]:
+            found.append(f"wrong dependency direction (gold {g['dependency']['direction']}, predicted {t['dependency']['direction']})")
+        if g["dependency"] and g["dependency"]["team"] in team_ids and p.get("routing"):
+            got = p["routing"]["keyword_llm"]
+            if got["team"] != g["dependency"]["team"]:
+                found.append(f"wrong team (gold {g['dependency']['team']}, predicted {got['team']}, decided by {got['method']})")
+        deadline = _deadline_error(g["deadline"], t["deadline"])
+        if deadline:
+            found.append(deadline)
         if found:
             errors.append({"id": i, "note": notes.get(i, ""), "categories": found})
     return errors

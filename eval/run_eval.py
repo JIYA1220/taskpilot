@@ -119,8 +119,7 @@ def build_document(
     provenance = {
         "input_file": store.SETS[set_name],
         "n_scored": first["items_scored"],
-        "n_single": first["single_task_items"],
-        "n_multi": first["multi_task_items"],
+        "n_with_dependency": first["items_with_a_gold_dependency"],
         "reasoning_effort": settings.groq_reasoning_effort,
         "fixed_now": store.FIXED_NOW.isoformat(),
         "prompt_sha256": freeze_record["prompt_sha256"] if freeze_record else {p.name: freeze._sha256(p) for p in sorted((Path(__file__).resolve().parent.parent / "backend" / "prompts").glob("*.md"))},
@@ -153,7 +152,7 @@ def estimate(
     reply sizes already in the cache. An estimate, not a promise: say so when reporting it."""
     system = load_prompt("extract").system
     probe = cache.CachingTransport(lambda *a: None, cache_dir, settings.groq_reasoning_effort, cache.Ledger())
-    deps = sum(1 for g in gold.values() if g["n_tasks"] == 1 and g["has_dependency"] and g["dependency_team"] in directory.team_ids())
+    deps = sum(1 for g in gold.values() if g["dependency"] and g["dependency"]["team"] in directory.team_ids())
     matcher_calls = deps if gold else math.ceil(0.3 * len(items))
     per_model = {}
     for model in models:

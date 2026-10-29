@@ -52,11 +52,9 @@ def _usage(entries: list[AuditEntry]) -> dict:
 
 
 def wants_routing(first_task: dict | None, gold: dict | None, team_ids: list[str]) -> bool:
-    """Which notes get the routing comparison: single-task notes whose gold names a directory team
-    (so every method is scored on the same items), plus any note where the model itself found a dependency."""
-    if gold is not None and gold["n_tasks"] > 1:
-        return False
-    if gold is not None and gold["has_dependency"] and gold["dependency_team"] in team_ids:
+    """Which notes get the routing comparison: notes whose gold names a directory team (so every
+    method is scored on the same notes), plus any note where the model itself found a dependency."""
+    if gold is not None and gold["dependency"] is not None and gold["dependency"]["team"] in team_ids:
         return True
     return bool(first_task and first_task["dependency"]["direction"] != "none")
 
