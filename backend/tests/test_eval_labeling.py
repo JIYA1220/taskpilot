@@ -88,6 +88,13 @@ def test_generator_reproduces_the_committed_files():
         assert rows == store.load_inputs(name) and coverage == COVERAGE[name]
 
 
+def test_the_worked_examples_are_not_in_the_dev_or_test_sets():
+    text = (EVAL / "WORKED_EXAMPLES.md").read_text(encoding="utf-8").lower()
+    rows = [line.split("|")[1].strip() for line in text.splitlines() if line.startswith("| ") and not line.startswith(("| note", "| ---", "|---"))]
+    notes = {r["input"].lower() for name in ("dev", "test") for r in store.load_inputs(name)}
+    assert len(rows) >= 10 and not set(rows) & notes, "teaching examples must never be dataset notes"
+
+
 def test_the_old_labels_are_archived_and_no_longer_where_the_tool_looks():
     assert (ARCHIVE / "labels" / "dataset.labels.jsonl").exists() and (ARCHIVE / "README.md").exists()
     assert "superseded" in (ARCHIVE / "README.md").read_text(encoding="utf-8").lower()
