@@ -116,6 +116,7 @@ def build_document(
         if index == 0:  # the error analysis is for the main model
             first_errors = metrics.error_items(scored_gold, predictions, notes, team_ids)
     first = per_model[models[0]]["counts"]
+    latest_labels = store.latest_by_id(store.read_history(set_name))
     provenance = {
         "input_file": store.SETS[set_name],
         "n_scored": first["items_scored"],
@@ -128,8 +129,12 @@ def build_document(
         "labels_sha256": freeze._sha256(store.label_path(set_name)) if store.label_path(set_name).exists() else None,
         "ledger": ledger,
         "generated_at": datetime.now(UTC).isoformat(),
-        "labeled_by": "human via eval/label_tool.py",
+        "labeled_by": sorted({r["labeled_by"] for r in latest_labels.values() if r["status"] == "labeled"}),
     }
+    sources = provenance["labeled_by"]
+    provenance["gold_source"] = (
+        "human" if sources == [store.LABELED_BY] else "ai" if sources == [store.AI_LABELED_BY] else "mixed"
+    )
     return {"set": set_name, "superseded": False, "provenance": provenance, "models": per_model}, first_errors
 
 

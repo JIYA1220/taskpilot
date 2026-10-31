@@ -26,6 +26,9 @@ TASK_TYPES = ("normal", "email")
 DIRECTIONS = ("need_from_them", "they_need_from_me")
 OWN_TEAM = "product"  # the person labeling is on this team; a dependency is always on another team
 LABELED_BY = "human via eval/label_tool.py"
+# Used only for a set whose gold labels were written by the assistant, by the project owner's instruction.
+# Reports read this marker, so such a set can never be presented as human-labeled.
+AI_LABELED_BY = "AI assistant (Claude) applying LABELING_GUIDE.md v2; NOT written by a human"
 LABEL_FIELDS = ("task_type", "dependency", "deadline")
 
 SETS = {"dev": "dev.jsonl", "test": "dataset.jsonl"}
@@ -59,13 +62,13 @@ def latest_by_id(history: list[dict]) -> dict[str, dict]:
     return latest
 
 
-def append_record(set_name: str, record: dict) -> dict:
+def append_record(set_name: str, record: dict, labeled_by: str = LABELED_BY) -> dict:
     LABEL_DIR.mkdir(parents=True, exist_ok=True)
     previous = [r for r in read_history(set_name) if r["id"] == record["id"]]
     record = {
         **record,
         "labeled_at": datetime.now(UTC).isoformat(),
-        "labeled_by": LABELED_BY,
+        "labeled_by": labeled_by,
         "revision": len(previous) + 1,
     }
     with label_path(set_name).open("a", encoding="utf-8") as f:

@@ -63,7 +63,7 @@ def render_summary(doc: dict) -> str:
         "## What was measured",
         "",
         f"- **Notes:** {prov['n_scored']} scored, all single-task, from `{prov['input_file']}` ({prov['n_with_dependency']} of them have a dependency on another team).",
-        "- **Gold labels:** three per note (task type, dependency, deadline), written by hand by Jiya with `eval/label_tool.py`, blind to any model output, following `eval/LABELING_GUIDE.md` (version 2). No label came from an AI.",
+        gold_line(prov),
         "- **Not evaluated:** the clarifying questions the app asks, and splitting a note into several tasks. Both exist in the product; neither is measured here.",
         "- **Notes:** written by an AI assistant (not by the evaluated models) after the prompts were fixed.",
         f"- **Models:** {', '.join(f'`{x}`' for x in models)}, each doing every step (extraction and the team matcher), temperature 0, reasoning effort `{prov['reasoning_effort']}`.",
@@ -102,12 +102,40 @@ def render_summary(doc: dict) -> str:
         "## Limitations",
         "",
         "- The evaluation is deliberately lean: clarifying questions and task splitting are not evaluated, and only three properties of each note are scored.",
-        "- One person labeled every note, so label noise is not measured; the demo organization, tasks and directory are synthetic.",
+        *limitation_on_labels(prov),
+        "- The demo organization, tasks and directory are synthetic.",
         "- The two models are two sizes of one open-weight family, and the result is for one prompt version at one time.",
         "- The test notes were written by the same assistant that wrote the prompts. The prompts were not tuned on the test notes, but the wording of the notes may still resemble the prompts.",
         "",
     ]
     return "\n".join(lines)
+
+
+def limitation_on_labels(prov: dict) -> list[str]:
+    if prov.get("gold_source") == "ai":
+        return [
+            "- **The notes, the prompts and the gold labels were all written by the same AI assistant.** Shared blind spots are possible and agreement may be inflated; "
+            "the evaluated models are a different, open-weight family. The labels were written from the guide before any model ran on these notes and were not adjusted afterwards.",
+            "- Because no human wrote the labels, label noise from a human labeler is not measured, and this result says nothing about how a human would label these notes.",
+        ]
+    return ["- One person labeled every note, so label noise is not measured."]
+
+
+def gold_line(prov: dict) -> str:
+    """Who wrote the gold labels, stated exactly as recorded in the label files."""
+    source = prov.get("gold_source", "human")
+    if source == "ai":
+        return (
+            "- **Gold labels:** three per note (task type, dependency, deadline), **written by the AI assistant (Claude) applying "
+            "`eval/LABELING_GUIDE.md` (version 2) to each note. They were NOT written by a human.** This measures how well the "
+            "models agree with the guide as an AI reads it. It is **not** a human-labeled benchmark and must not be described as one."
+        )
+    if source == "mixed":
+        return "- **Gold labels:** three per note. **Some were written by a human and some by the AI assistant**; see `labeled_by` in `metrics.json`. Do not describe this as human-labeled."
+    return (
+        "- **Gold labels:** three per note (task type, dependency, deadline), written by hand by Jiya with `eval/label_tool.py`, "
+        "blind to any model output, following `eval/LABELING_GUIDE.md` (version 2). No label came from an AI."
+    )
 
 
 def pct_value(value: float | None) -> str:
