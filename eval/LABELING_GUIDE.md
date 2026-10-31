@@ -87,3 +87,7 @@ The tool asks three questions per note and has no defaults except a blank deadli
 - The **notes** were written by Claude (an AI assistant), not by the models being evaluated. They were written after the prompts were fixed, and the prompts will not be tuned on the test notes.
 - **No labels** were written, drafted or suggested by any AI. The label files are produced only by `label_tool.py` from your answers.
 - The assistant will not read the test labels before the prompts are frozen.
+
+### Amendment, 1 November 2026: round 2 labels are AI-written
+
+The three rules above are unchanged. What changed is who applied them. Jiya's round 1 labels disagreed with this guide on many notes, so round 1 was invalidated (`eval/archive/round1_human/README.md`). **By the project owner's instruction, the gold labels for round 2 were written by the assistant applying this guide, not by a human.** They are marked `labeled_by = "AI assistant (Claude) applying LABELING_GUIDE.md v2; NOT written by a human"` in every label record, each states the rule it applies, and every report says so. The statements above that "no label came from an AI" describe the human labeling process and do **not** apply to round 2.

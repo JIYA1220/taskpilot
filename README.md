@@ -16,7 +16,7 @@ Work in progress. Nothing below has been measured yet: **evaluation results: not
 | M3 Reviewer emails and approve-before-send | done for the local test inbox only (SMTP tested against a real local server; tried live end to end). **Real Gmail sending is not built yet** |
 | M4 Dependencies and schedule conflicts | done (tested with a mocked LLM and pure unit tests; tried live in the UI). Dependency detection accuracy: not yet measured |
 | M5 Team chat | not started |
-| M6 Evaluation on hand-labeled data | in progress, re-scoped to a lean design (10 dev + 30 test notes, three labels each): notes, blind labeling tool, runner, scoring and freeze are built and tested with a scripted fake model; the version 2 labeling guide **awaits approval**; **no gold labels yet; all results: not yet measured** |
+| M6 Evaluation (lean design: 30 test notes, three labels each) | built and run; **round 1 (human labels) was invalidated; round 2 uses AI-written gold labels and is not a human-labeled benchmark**. Results are in `eval/results/` |
 | M7 README, demo, deployment notes | not started |
 
 ## Run it
@@ -57,7 +57,12 @@ python -m eval.label_tool test --stats   # labeling progress
 
 The evaluation is deliberately **lean**. It uses **10 dev notes** (for prompt tuning) and **30 test notes** (never used for tuning), all single-task, in [`eval/dev.jsonl`](eval/dev.jsonl) and [`eval/dataset.jsonl`](eval/dataset.jsonl). The test set was designed to contain at least 10 notes with a dependency on another team (at least 3 of them in the reverse direction), about 8 email tasks and at least 8 notes with a relative deadline, plus some hard negatives (a team or system merely mentioned, an external vendor, "urgent" with no deadline, an embedded instruction aimed at the AI). The notes were written by an AI assistant, not by the evaluated models.
 
-**Every gold label is written by a person** with [`eval/label_tool.py`](eval/label_tool.py), which shows only the note text, and follows [`eval/LABELING_GUIDE.md`](eval/LABELING_GUIDE.md) (version 2). There are exactly **three labels per note**: task type, dependency (none, or a team plus a direction) and deadline. Labels are stored append-only with timestamps and revision numbers in `eval/labels/`.
+There are exactly **three labels per note**: task type, dependency (none, or a team plus a direction) and deadline, following [`eval/LABELING_GUIDE.md`](eval/LABELING_GUIDE.md) (version 2). Labels are stored append-only with timestamps and revision numbers in `eval/labels/`, and every record says who wrote it.
+
+> **Who wrote the gold labels, stated plainly.**
+> - **Round 1 (human labels): invalidated.** Jiya labeled 30 notes by hand with the blind tool, but many labels disagreed with the approved guide, so the error analysis showed the scores measured the labels more than the models. The notes, labels and results are archived and marked superseded (`eval/archive/round1_human/`, `eval/results/superseded/`). They must not be quoted.
+> - **Round 2 (current): the gold labels were written by the AI assistant (Claude), applying the guide, by the project owner's instruction. They are NOT human-written.** Every label record is marked as such, each states the rule it applies (see `eval/design/ai_gold.py`), and every generated report says so. The 30 notes are fresh (no model had seen them), and the labels were written from the guide before any model ran on them and are not adjusted to match a model.
+> - **Consequence: do not describe round 2 as a "hand-labeled" or "human-labeled" benchmark.** It measures how well the models agree with the guide as an AI applies it. The notes, the prompts and the labels all came from the same assistant, so shared blind spots are possible and agreement may be inflated. The labeling tool (`eval/label_tool.py`) and its checks remain for any future human labeling.
 
 **What this evaluation does not measure, stated plainly:**
 - **The clarifying questions the app asks are not evaluated**, and neither is **splitting a note into several tasks**. Both are in the product; neither is measured here. (An earlier, larger design that also covered them was dropped; it is archived in `eval/archive/full_v1/`, is not used, and none of it is a result.)
@@ -95,7 +100,7 @@ Compare against the approved guide's tables (especially the deadline table and r
 
 The order, and why:
 
-1. **Label** the dev notes, then the test notes, by hand (`python -m eval.label_tool dev`, then `test`). Nothing below can produce a reported number without them.
+1. **Get gold labels.** Either label by hand with the blind tool (`python -m eval.label_tool dev`, then `test`), or, as in round 2, have the assistant write them from the guide (`python -m eval.design.ai_gold`). Every label record says who wrote it, and the generated report repeats that, so the two can never be confused. Nothing below can produce a reported number without labels.
 2. **Tune prompts on the dev set only.** `python -m eval.run_eval run --set dev` is free to run as often as you like (its output goes to `eval/results/dev/`, which git ignores, and is labeled "NOT a reported result").
 3. **Commit everything, then freeze:** `python -m eval.freeze`. It refuses unless every test note is labeled and every file the result depends on is committed, then records their exact committed identities (prompts, matcher and extraction code, the directory, the test notes, the labels, the scoring code and the runner) in `eval/results/freeze.json`.
 4. **Check the cost first:** `python -m eval.run_eval estimate --set test --daily-token-cap N` (N from the Groq console) says how many tokens and calls the run needs and whether it fits in a day.
