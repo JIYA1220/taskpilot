@@ -26,7 +26,7 @@
   "t12": "email+deadline",
   "t13": "plain+deadline",
   "t14": "trap",
-  "t15": "dep_need",
+  "t15": "dep_need+deadline",
   "t16": "plain",
   "t17": "dep_need",
   "t18": "dep_need+deadline",
