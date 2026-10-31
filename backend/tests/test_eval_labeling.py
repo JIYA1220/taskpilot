@@ -60,16 +60,90 @@ def test_coverage_ids_match_the_input_files():
         assert {r["id"] for r in store.load_inputs(name)} == set(COVERAGE[name])
 
 
-def test_dev_and_test_notes_do_not_overlap_each_other_or_the_archived_sets():
+def test_dev_and_test_notes_do_not_overlap_each_other_or_any_archived_set():
     dev = {r["input"].lower() for r in store.load_inputs("dev")}
     test = {r["input"].lower() for r in store.load_inputs("test")}
     old = {
         json.loads(line)["input"].lower()
-        for f in ("dev.jsonl", "dataset.jsonl")
-        for line in (ARCHIVE / f).read_text(encoding="utf-8").splitlines()
+        for path in (ARCHIVE / "dev.jsonl", ARCHIVE / "dataset.jsonl", EVAL / "archive" / "round1_human" / "dataset.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     }
-    assert not dev & test and not (dev | test) & old
+    assert not dev & test, "dev and test must not share a note"
+    assert not test & old, "the round 2 test notes must be fresh: no model has seen them"
+
+
+# ---- round 2: the AI-written gold labels ---------------------------------------
+
+
+def test_every_test_note_has_exactly_one_ai_gold_row():
+    from eval.design import ai_gold
+
+    notes = [r["input"] for r in store.load_inputs("test")]
+    rows = [r[1] for r in ai_gold.TEST_GOLD]
+    assert sorted(notes) == sorted(rows) and len(set(rows)) == 30
+
+
+def test_the_ai_gold_labels_are_valid_and_meet_the_requested_composition():
+    from eval.design import ai_gold
+
+    labels = [ai_gold.labels_for(row) for row in ai_gold.TEST_GOLD]
+    for row, label in zip(ai_gold.TEST_GOLD, labels):
+        assert store.validate_labels(label, TEAMS) == [], row[1]
+    deps = [x["dependency"] for x in labels if x["dependency"]]
+    assert len(deps) >= 10 and sum(d["direction"] == "they_need_from_me" for d in deps) >= 3
+    assert sum(x["task_type"] == "email" for x in labels) == 8
+    assert sum(1 for x in labels if x["deadline"]) >= 8
+
+
+def test_the_ai_gold_agrees_with_its_own_design_categories():
+    from eval.design import ai_gold
+
+    for category, note, task_type, dependency, deadline, rule in ai_gold.TEST_GOLD:
+        base = category.split("+")[0]
+        assert (deadline is not None) == category.endswith("+deadline"), note
+        assert (task_type == "email") == (base == "email"), note
+        assert (dependency is not None) == (base in ("dep_need", "dep_reverse")), note
+        if base == "dep_reverse":
+            assert dependency[1] == "they_need_from_me", note
+        assert rule.strip(), "every label states the rule it applies"
+
+
+def test_the_deadline_helpers_reproduce_the_guides_table():
+    from eval.design import ai_gold as g
+
+    assert g.day_only("fri") == "2026-11-06T23:59:00+05:30"  # a weekday alone
+    assert g.day_only("mon") == "2026-11-02T23:59:00+05:30"  # 'today' alone
+    assert g.day_only("tue") == "2026-11-03T23:59:00+05:30"  # 'tomorrow' alone
+    assert g.morning("tue") == "2026-11-03T12:00:00+05:30"
+    assert g.tonight() == "2026-11-02T21:00:00+05:30"
+    assert g.bare_hour(5) == "2026-11-02T17:00:00+05:30" and g.bare_hour(6) == "2026-11-02T18:00:00+05:30"
+    assert g.bare_hour(9) == "2026-11-02T09:00:00+05:30" and g.bare_hour(11) == "2026-11-02T11:00:00+05:30"
+    assert g.in_hours(2) == "2026-11-02T11:00:00+05:30" and g.in_hours(3) == "2026-11-02T12:00:00+05:30"
+    assert g.clock(16) == "2026-11-02T16:00:00+05:30"
+
+
+def test_writing_the_ai_gold_marks_every_record_as_not_human_written(tmp_path, monkeypatch):
+    from eval.design import ai_gold
+
+    monkeypatch.setattr(store, "LABEL_DIR", tmp_path / "labels")
+    assert ai_gold.write_labels("test") == 30
+    records = store.read_history("test")
+    assert len(records) == 30 and {r["labeled_by"] for r in records} == {store.AI_LABELED_BY}
+    assert "NOT written by a human" in store.AI_LABELED_BY and all(r["notes"].startswith("AI-applied rule:") for r in records)
+    assert store.progress("test").labeled == 30
+
+
+def test_the_committed_test_labels_are_all_marked_as_ai_written():
+    records = store.read_history("test")
+    assert len(records) == 30 and {r["labeled_by"] for r in records} == {store.AI_LABELED_BY}
+
+
+def test_the_human_round_is_archived_with_its_labels_and_the_reason():
+    round1 = EVAL / "archive" / "round1_human"
+    assert (round1 / "labels" / "dataset.labels.jsonl").exists() and (round1 / "dataset.jsonl").exists()
+    text = (round1 / "README.md").read_text(encoding="utf-8").lower() if (round1 / "README.md").exists() else ""
+    assert "invalidated" in text and "human" in text
 
 
 def test_input_order_does_not_follow_category():

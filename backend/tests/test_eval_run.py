@@ -216,14 +216,25 @@ def test_invalid_json_is_scored_as_the_models_failure_not_an_infrastructure_prob
 # ---- reports ------------------------------------------------------------------
 
 
-def document(paths, set_name="dev", freeze_record=None, replies=REPLIES):
+@pytest.fixture(autouse=True)
+def isolated_labels(tmp_path, monkeypatch):
+    """Label files for these tests live in a temp folder, never in the real eval/labels."""
+    monkeypatch.setattr(store, "LABEL_DIR", tmp_path / "labels")
+
+
+def write_gold(set_name, labeled_by=store.LABELED_BY):
+    for item_id, g in GOLD.items():
+        store.append_record(set_name, {"id": item_id, "status": "labeled", **g, "notes": ""}, labeled_by=labeled_by)
+
+
+def document(paths, set_name="dev", freeze_record=None, replies=REPLIES, labeled_by=store.LABELED_BY):
+    write_gold(set_name, labeled_by)
     t, ledger, _ = transport(paths, FakeModel(replies))
     run_eval.run_models(MODELS, ITEMS, GOLD, DIRECTORY, SETTINGS, t, paths, announce=lambda *_: None)
     return run_eval.build_document(set_name, MODELS, ITEMS, GOLD, DIRECTORY, SETTINGS, ledger.as_dict(), paths, freeze_record)
 
 
-def test_the_documents_carry_numbers_provenance_and_the_wrong_notes(paths, monkeypatch):
-    monkeypatch.setattr(store, "label_path", lambda s: paths.results / "no-labels.jsonl")
+def test_the_documents_carry_numbers_provenance_and_the_wrong_notes(paths):
     wrong = {**REPLIES, NOTES["n3"]: {"tasks": [one("Update the readme", deadline=TUE_END)]}}  # invents a deadline
     doc, errors = document(paths, replies=wrong)
     a = doc["models"]["model-a"]
@@ -231,13 +242,13 @@ def test_the_documents_carry_numbers_provenance_and_the_wrong_notes(paths, monke
     assert a["task_type_accuracy"]["k"] == 4 and a["json_valid_first_try"]["k"] == 4 and a["deadline_exact_match"]["k"] == 3
     assert [e["id"] for e in errors] == ["n3"] and errors[0]["categories"][0].startswith("deadline: none expected")
     prov = doc["provenance"]
-    assert prov["n_scored"] == 4 and prov["n_with_dependency"] == 1 and prov["labeled_by"] == "human via eval/label_tool.py"
+    assert prov["n_scored"] == 4 and prov["n_with_dependency"] == 1
+    assert prov["labeled_by"] == [store.LABELED_BY] and prov["gold_source"] == "human"
     assert prov["freeze_id"] is None and prov["ledger"]["api_calls_made"] == 8
     assert set(prov["prompt_sha256"]) >= {"extract.v1.md", "rewrite.v1.md", "match_team.v1.md"}
 
 
-def test_written_reports_state_what_they_are_and_what_they_are_not(paths, monkeypatch):
-    monkeypatch.setattr(store, "label_path", lambda s: paths.results / "no-labels.jsonl")
+def test_written_reports_state_what_they_are_and_what_they_are_not(paths):
     doc, errors = document(paths)
     run_eval.write_reports(doc, errors, MODELS, paths)
     metrics = json.loads((paths.results / "metrics.json").read_text())
@@ -255,8 +266,34 @@ def test_written_reports_state_what_they_are_and_what_they_are_not(paths, monkey
     assert "Model analysed: `model-a`" in analysis and "0 of 4 notes" in analysis and "- None." in analysis
 
 
-def test_the_test_set_summary_names_the_freeze(paths, monkeypatch):
-    monkeypatch.setattr(store, "label_path", lambda s: paths.results / "no-labels.jsonl")
+def test_ai_written_gold_is_reported_as_ai_written_never_as_human(paths):
+    doc, errors = document(paths, labeled_by=store.AI_LABELED_BY)
+    assert doc["provenance"]["gold_source"] == "ai" and doc["provenance"]["labeled_by"] == [store.AI_LABELED_BY]
+    run_eval.write_reports(doc, errors, MODELS, paths)
+    summary = (paths.results / "summary.md").read_text()
+    assert "written by the AI assistant (Claude)" in summary and "NOT written by a human" in summary
+    assert "not** a human-labeled benchmark" in summary and "must not be described as one" in summary
+    assert "written by hand by Jiya" not in summary and "No label came from an AI" not in summary
+    assert "all written by the same AI assistant" in summary and "says nothing about how a human would label" in summary
+
+
+def test_a_mix_of_human_and_ai_labels_is_flagged_as_mixed(paths):
+    write_gold("dev")  # human labels first, then an AI revision of one note
+    store.append_record("dev", {"id": "n1", "status": "labeled", **GOLD["n1"], "notes": ""}, labeled_by=store.AI_LABELED_BY)
+    t, ledger, _ = transport(paths)
+    run_eval.run_models(MODELS, ITEMS, GOLD, DIRECTORY, SETTINGS, t, paths, announce=lambda *_: None)
+    doc, _ = run_eval.build_document("dev", MODELS, ITEMS, GOLD, DIRECTORY, SETTINGS, ledger.as_dict(), paths, None)
+    assert doc["provenance"]["gold_source"] == "mixed"
+    assert "Some were written by a human and some by the AI assistant" in report_text(doc)
+
+
+def report_text(doc):
+    from eval import report
+
+    return report.render_summary(doc)
+
+
+def test_the_test_set_summary_names_the_freeze(paths):
     freeze_record = {"freeze_id": "abc123def4", "git_commit": "0123456789abcdef", "prompt_sha256": {"extract.v1.md": "x"}}
     doc, errors = document(paths, "test", freeze_record)
     run_eval.write_reports(doc, errors, MODELS, paths)
